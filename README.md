@@ -2,6 +2,22 @@
 
 WPF (.NET 10 for Windows) 音频设备快速切换工具。常驻系统托盘，支持配置管理、全局快捷键、应用级音频路由、蓝牙检测。
 
+## 截图
+
+### 主窗口
+![主窗口](docs/screenshots/main.png)
+
+### 迷你窗口
+![迷你窗口](docs/screenshots/mini.png)
+
+### 应用级音频路由
+![应用音频](docs/screenshots/app-audio.png)
+
+### 设置
+![设置](docs/screenshots/settings.png)
+
+> 截图文件放到 `docs/screenshots/` 下对应名字即可在 README 自动显示。
+
 ## 功能
 
 - **一键切换**：播放 / 录音设备快速切换（使用未文档化的 `IPolicyConfig` COM API）
