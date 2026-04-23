@@ -10,6 +10,15 @@ WPF (.NET 10 for Windows) 音频设备快速切换工具。常驻系统托盘，
 ### 迷你窗口
 ![迷你窗口](docs/screenshots/mini.png)
 
+### 托盘菜单
+![托盘](docs/screenshots/tray.png)
+
+### 配置编辑
+![配置设置](docs/screenshots/profile-edit.png)
+
+### 应用配置（独立预设）
+![应用配置](docs/screenshots/app-profiles.png)
+
 ### 应用级音频路由
 ![应用音频](docs/screenshots/app-audio.png)
 
