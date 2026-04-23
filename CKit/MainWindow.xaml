@@ -1,0 +1,232 @@
+<Window x:Class="AudioDeviceSwitcher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="&#x97F3;&#x9891;&#x5207;&#x6362;&#x52A9;&#x624B;" Height="720" Width="560"
+        Icon="pack://application:,,,/Resources/app.ico"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResizeWithGrip">
+    <Window.Resources>
+        <Style x:Key="DeviceButton" TargetType="Button">
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#E5E7EB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#F9FAFB"/>
+                    <Setter Property="BorderBrush" Value="#D1D5DB"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="DefaultDeviceButton" TargetType="Button" BasedOn="{StaticResource DeviceButton}">
+            <Setter Property="Background" Value="#EFF6FF"/>
+            <Setter Property="BorderBrush" Value="#3B82F6"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#DBEAFE"/>
+                    <Setter Property="BorderBrush" Value="#2563EB"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ProfileCard" TargetType="Border">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#E5E7EB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="12,10"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+        <Style x:Key="ActiveProfileCard" TargetType="Border" BasedOn="{StaticResource ProfileCard}">
+            <Setter Property="Background" Value="#EFF6FF"/>
+            <Setter Property="BorderBrush" Value="#3B82F6"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="ProfileApplyButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <ContentPresenter/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="SmallLinkButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="#6B7280"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <TextBlock Text="{TemplateBinding Content}"
+                                   Foreground="{TemplateBinding Foreground}"
+                                   FontSize="{TemplateBinding FontSize}"
+                                   Padding="{TemplateBinding Padding}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="#111827"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#374151"/>
+            <Setter Property="Margin" Value="0,6,0,4"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel Background="#FFFFFF">
+        <Border DockPanel.Dock="Top" Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="0,0,0,1">
+        <Menu Background="Transparent" Padding="4,2">
+            <MenuItem Header="&#x6587;&#x4EF6;">
+                <MenuItem Header="&#x5237;&#x65B0;" Click="Refresh_Click"/>
+                <Separator/>
+                <MenuItem Header="&#x9000;&#x51FA;" Click="ExitApp_Click"/>
+            </MenuItem>
+            <MenuItem Header="&#x89C6;&#x56FE;">
+                <MenuItem x:Name="MiniWindowMenuItem" Header="&#x6253;&#x5F00;&#x8FF7;&#x4F60;&#x7A97;&#x53E3;" Click="ToggleMiniWindow_Click"/>
+                <MenuItem Header="&#x5E94;&#x7528;&#x914D;&#x7F6E;" Click="OpenAppProfiles_Click"/>
+                <MenuItem Header="&#x5E94;&#x7528;&#x97F3;&#x9891;" Click="OpenAppAudio_Click"/>
+            </MenuItem>
+            <MenuItem Header="&#x5DE5;&#x5177;">
+                <MenuItem Header="&#x7CFB;&#x7EDF;&#x58F0;&#x97F3;" Click="OpenSoundSettings_Click"/>
+                <MenuItem Header="&#x8BBE;&#x7F6E;&#x2026;" Click="OpenSettings_Click"/>
+            </MenuItem>
+            <MenuItem Header="&#x5E2E;&#x52A9;">
+                <MenuItem Header="&#x5173;&#x4E8E;&#x2026;" Click="OpenAbout_Click"/>
+            </MenuItem>
+        </Menu>
+        </Border>
+        <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Profiles Section -->
+        <Border x:Name="ProfileSection" Grid.Row="0" Grid.RowSpan="2" CornerRadius="6" Padding="0"
+                BorderThickness="0" BorderBrush="Transparent" Background="Transparent">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="&#x914D;&#x7F6E;" DockPanel.Dock="Left"/>
+                    <Border x:Name="ProfileWarningText" DockPanel.Dock="Left"
+                            VerticalAlignment="Center" Margin="10,0,0,0" Visibility="Collapsed"
+                            Background="#FEF2F2" BorderBrush="#FECACA" BorderThickness="1"
+                            CornerRadius="4" Padding="8,3">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="6" Height="6" Fill="#DC2626"
+                                     VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="&#x5F53;&#x524D;&#x8BBE;&#x5907;&#x4E0D;&#x5339;&#x914D;&#x4EFB;&#x4F55;&#x914D;&#x7F6E;"
+                                       FontSize="11" Foreground="#991B1B" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Style.Triggers>
+                                    <Trigger Property="Tag" Value="Blink">
+                                        <Trigger.EnterActions>
+                                            <BeginStoryboard Name="ProfileWarningBlink">
+                                                <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                     From="1.0" To="0.55" Duration="0:0:0.8"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </Trigger.EnterActions>
+                                        <Trigger.ExitActions>
+                                            <StopStoryboard BeginStoryboardName="ProfileWarningBlink"/>
+                                        </Trigger.ExitActions>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                    </Border>
+                    <TextBlock x:Name="AppDriftWarningText" FontSize="11" Foreground="#92400E"
+                               VerticalAlignment="Center" Margin="10,0,0,0" DockPanel.Dock="Left" Visibility="Collapsed"
+                               TextTrimming="CharacterEllipsis"/>
+                    <Button Content="+ &#x65B0;&#x5EFA;" Padding="10,3" Margin="8,0,0,0" VerticalAlignment="Center"
+                            HorizontalAlignment="Left" Click="NewProfile_Click"/>
+                </DockPanel>
+                <ItemsControl x:Name="ProfileList" Margin="0,4,0,4"/>
+                <TextBlock x:Name="ProfileEmptyHint"
+                           Text="&#x70B9;&#x51FB;&#x4E0A;&#x65B9;&#x7684; + &#x65B0;&#x5EFA; &#x521B;&#x5EFA;&#x7B2C;&#x4E00;&#x4E2A;&#x914D;&#x7F6E;"
+                           FontSize="12" Foreground="#9CA3AF"
+                           HorizontalAlignment="Center" Margin="0,8,0,6"
+                           Visibility="Collapsed"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Playback Devices -->
+        <DockPanel Grid.Row="2">
+            <TextBlock Style="{StaticResource SectionHeader}" Text="&#x64AD;&#x653E;&#x8BBE;&#x5907;" DockPanel.Dock="Left"/>
+            <TextBlock x:Name="PlaybackHiddenCount" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"
+                       Margin="6,0,0,0" DockPanel.Dock="Left" Visibility="Collapsed"/>
+            <CheckBox x:Name="ShowHiddenCheck" Content="&#x663E;&#x793A;&#x5DF2;&#x9690;&#x85CF;" FontSize="11"
+                      Foreground="#6B7280"
+                      VerticalAlignment="Center" Margin="12,0,0,0" DockPanel.Dock="Left"
+                      Checked="ShowHidden_Changed" Unchecked="ShowHidden_Changed"/>
+            <CheckBox x:Name="ShowDisabledCheck" Content="&#x663E;&#x793A;&#x5DF2;&#x7981;&#x7528;" FontSize="11"
+                      Foreground="#6B7280"
+                      VerticalAlignment="Center" Margin="10,0,0,0" DockPanel.Dock="Left"
+                      Checked="ShowDisabled_Changed" Unchecked="ShowDisabled_Changed"/>
+        </DockPanel>
+        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="PlaybackList" Margin="0,0,6,0"/>
+        </ScrollViewer>
+
+        <!-- Recording Devices -->
+        <DockPanel Grid.Row="4" LastChildFill="False">
+            <TextBlock Style="{StaticResource SectionHeader}" Text="&#x5F55;&#x97F3;&#x8BBE;&#x5907;" DockPanel.Dock="Left"/>
+            <TextBlock x:Name="RecordingHiddenCount" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"
+                       Margin="6,0,0,0" DockPanel.Dock="Left" Visibility="Collapsed"/>
+        </DockPanel>
+        <ScrollViewer Grid.Row="5" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="RecordingList" Margin="0,0,6,0"/>
+        </ScrollViewer>
+
+        <!-- Bluetooth Warning -->
+        <Border x:Name="BluetoothWarning" Grid.Row="6" Background="#FFFBEB" BorderBrush="#FCD34D"
+                BorderThickness="1" CornerRadius="4" Padding="10,6" Margin="0,4,0,4" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <Ellipse Width="6" Height="6" Fill="#D97706" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <TextBlock Text="&#x84DD;&#x7259;&#x8BBE;&#x5907;&#x5DF2;&#x8FDE;&#x63A5;" FontSize="11"
+                           Foreground="#92400E" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+        </Grid>
+    </DockPanel>
+</Window>

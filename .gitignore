@@ -1,0 +1,35 @@
+# .NET build output
+bin/
+obj/
+publish/
+dist/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.ncb
+*.sdf
+*.opensdf
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+
+# VS Code
+.vscode/
+
+# Runtime / cache
+*.log
+*.tmp
+*.DS_Store
+Thumbs.db
+
+# Claude Code / session state
+.claude/
+memory/
+
+# Secrets (shouldn't exist but safety net)
+*.env
+*.pfx
+*.snk
