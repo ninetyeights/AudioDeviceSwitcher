@@ -173,16 +173,20 @@ public partial class MainWindow : Window
 
     public void RefreshFromExternalChange()
     {
-        // Skip if hidden — nothing to show anyway
-        if (!IsVisible) return;
+        // Nothing to refresh if both windows are hidden/closed
+        if (!IsVisible && _miniWindow == null) return;
 
         // Skip if state hasn't changed (avoid needless UI rebuild)
         var signature = ComputeStateSignature();
         if (signature == _lastStateSignature) return;
         _lastStateSignature = signature;
 
-        LoadDevices();
-        LoadProfiles();
+        if (IsVisible)
+        {
+            LoadDevices();
+            LoadProfiles();
+        }
+        _miniWindow?.LoadProfiles();
     }
 
     private static string ComputeStateSignature()

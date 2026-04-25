@@ -4,7 +4,6 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Threading;
 
 namespace AudioDeviceSwitcher;
 
@@ -28,7 +27,6 @@ public partial class MiniWindow : Window
     private static bool IsLeftMouseDown() => (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 
     private readonly Action? _onProfileApplied;
-    private readonly DispatcherTimer _pollTimer;
     private readonly Border _border;
     private bool _isLocked;
 
@@ -44,16 +42,10 @@ public partial class MiniWindow : Window
         ApplySettings();
         LoadProfiles();
 
-        // Poll for external device changes every 2 seconds
-        _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _pollTimer.Tick += (_, _) => LoadProfiles();
-        _pollTimer.Start();
+        // External device/profile/drift refreshes are pushed by App.CheckDeviceChanges
+        // (event-driven via DeviceChangeNotifier + 5-sec safety-net timer). No local poll.
 
-        Closed += (_, _) =>
-        {
-            SaveSettings();
-            _pollTimer.Stop();
-        };
+        Closed += (_, _) => SaveSettings();
         LocationChanged += (_, _) =>
         {
             if (IsLeftMouseDown()) SaveSettings();

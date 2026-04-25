@@ -276,6 +276,14 @@ public partial class App : Application
             return;
         }
 
+        // Single batched Process.GetProcesses() call covers all overrides — beats one
+        // full system scan per override (Process.GetProcesses is allocation-heavy).
+        var allExes = active.AppOverrides
+            .Select(o => o.ExePath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
+        var runningByPath = ProfileApplyService.GetRunningProcessesByPath(allExes);
+
         var drifted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var ov in active.AppOverrides)
         {
@@ -283,8 +291,7 @@ public partial class App : Application
             var appProfile = AppProfileService.Get(ov.AppProfileId);
             if (appProfile == null) continue;
 
-            var pids = ProfileApplyService.GetRunningPidsForExe(ov.ExePath);
-            if (pids.Count == 0) continue; // not running — skip
+            if (!runningByPath.TryGetValue(ov.ExePath, out var pids) || pids.Count == 0) continue; // not running — skip
 
             // Query across all matching PIDs; return first non-null hit (some PIDs return
             // E_INVALIDARG for this app's identity mapping, others succeed).

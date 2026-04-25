@@ -104,14 +104,21 @@ public static class ProfileApplyService
 
     public static bool HasDriftedOverrides(DeviceProfile profile)
     {
+        var exes = profile.AppOverrides
+            .Select(o => o.ExePath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
+        if (exes.Count == 0) return false;
+
+        var runningByPath = GetRunningProcessesByPath(exes);
+
         foreach (var ov in profile.AppOverrides)
         {
             if (string.IsNullOrWhiteSpace(ov.ExePath)) continue;
             var appProfile = AppProfileService.Get(ov.AppProfileId);
             if (appProfile == null) continue;
 
-            var pids = GetRunningPidsForExe(ov.ExePath);
-            if (pids.Count == 0) continue;
+            if (!runningByPath.TryGetValue(ov.ExePath, out var pids) || pids.Count == 0) continue;
 
             string? actualOut = null, actualIn = null;
             foreach (var pid in pids)
@@ -137,7 +144,7 @@ public static class ProfileApplyService
 
     // Only probes MainModule for processes whose name matches targets — skipping the rest
     // (MainModule access is slow; full-system scan takes several seconds).
-    private static Dictionary<string, List<uint>> GetRunningProcessesByPath(HashSet<string> targetPaths)
+    public static Dictionary<string, List<uint>> GetRunningProcessesByPath(HashSet<string> targetPaths)
     {
         var map = new Dictionary<string, List<uint>>(StringComparer.OrdinalIgnoreCase);
         if (targetPaths.Count == 0) return map;

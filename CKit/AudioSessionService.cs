@@ -31,54 +31,63 @@ public static class AudioSessionService
 
             foreach (var device in devices)
             {
-                AudioSessionManager manager;
                 try
                 {
-                    manager = device.AudioSessionManager;
-                }
-                catch (COMException) { continue; }
-
-                var sessions = manager.Sessions;
-                if (sessions == null) continue;
-
-                for (int i = 0; i < sessions.Count; i++)
-                {
-                    var session = sessions[i];
-                    uint pid;
-                    try { pid = session.GetProcessID; }
-                    catch { continue; }
-
-                    if (pid == 0) continue;
-                    if (seen.ContainsKey(pid)) continue;
-
-                    string displayName = "";
-                    string? exePath = null;
-                    ImageSource? icon = null;
+                    AudioSessionManager? manager;
+                    try { manager = device.AudioSessionManager; }
+                    catch (COMException) { continue; }
 
                     try
                     {
-                        using var proc = Process.GetProcessById((int)pid);
-                        displayName = proc.ProcessName;
-                        try { exePath = proc.MainModule?.FileName; } catch { }
-                    }
-                    catch
-                    {
-                        continue; // process gone
-                    }
+                        var sessions = manager.Sessions;
+                        if (sessions == null) continue;
 
-                    if (string.IsNullOrEmpty(displayName))
-                    {
-                        try { displayName = session.DisplayName ?? ""; } catch { }
-                    }
-                    if (string.IsNullOrEmpty(displayName)) displayName = $"PID {pid}";
+                        for (int i = 0; i < sessions.Count; i++)
+                        {
+                            var session = sessions[i];
+                            try
+                            {
+                                uint pid;
+                                try { pid = session.GetProcessID; }
+                                catch { continue; }
 
-                    if (!string.IsNullOrEmpty(exePath))
-                    {
-                        try { icon = DeviceIconHelper.GetExeIcon(exePath); } catch { }
-                    }
+                                if (pid == 0) continue;
+                                if (seen.ContainsKey(pid)) continue;
 
-                    seen[pid] = new AppAudioSessionInfo(pid, displayName, exePath, icon);
+                                string displayName = "";
+                                string? exePath = null;
+                                ImageSource? icon = null;
+
+                                try
+                                {
+                                    using var proc = Process.GetProcessById((int)pid);
+                                    displayName = proc.ProcessName;
+                                    try { exePath = proc.MainModule?.FileName; } catch { }
+                                }
+                                catch
+                                {
+                                    continue; // process gone
+                                }
+
+                                if (string.IsNullOrEmpty(displayName))
+                                {
+                                    try { displayName = session.DisplayName ?? ""; } catch { }
+                                }
+                                if (string.IsNullOrEmpty(displayName)) displayName = $"PID {pid}";
+
+                                if (!string.IsNullOrEmpty(exePath))
+                                {
+                                    try { icon = DeviceIconHelper.GetExeIcon(exePath); } catch { }
+                                }
+
+                                seen[pid] = new AppAudioSessionInfo(pid, displayName, exePath, icon);
+                            }
+                            finally { try { session.Dispose(); } catch { } }
+                        }
+                    }
+                    finally { try { manager.Dispose(); } catch { } }
                 }
+                finally { device.Dispose(); }
             }
         }
 

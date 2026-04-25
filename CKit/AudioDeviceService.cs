@@ -24,10 +24,11 @@ public static class AudioDeviceService
     private static List<AudioDeviceInfo> GetDevices(DataFlow dataFlow, bool includeDisabled)
     {
         using var enumerator = new MMDeviceEnumerator();
-        MMDevice? defaultDevice = null;
+        string? defaultId = null;
         try
         {
-            defaultDevice = enumerator.GetDefaultAudioEndpoint(dataFlow, Role.Multimedia);
+            using var defaultDevice = enumerator.GetDefaultAudioEndpoint(dataFlow, Role.Multimedia);
+            defaultId = defaultDevice.ID;
         }
         catch (COMException) { }
 
@@ -38,20 +39,20 @@ public static class AudioDeviceService
         var result = new List<AudioDeviceInfo>();
         foreach (var device in devices)
         {
-            ImageSource? icon = null;
             try
             {
-                icon = DeviceIconHelper.GetDeviceIcon(device.IconPath);
-            }
-            catch { }
+                ImageSource? icon = null;
+                try { icon = DeviceIconHelper.GetDeviceIcon(device.IconPath); } catch { }
 
-            result.Add(new AudioDeviceInfo(
-                device.ID,
-                device.FriendlyName,
-                defaultDevice != null && device.ID == defaultDevice.ID,
-                icon,
-                device.State == DeviceState.Disabled
-            ));
+                result.Add(new AudioDeviceInfo(
+                    device.ID,
+                    device.FriendlyName,
+                    defaultId != null && device.ID == defaultId,
+                    icon,
+                    device.State == DeviceState.Disabled
+                ));
+            }
+            finally { device.Dispose(); }
         }
         result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase));
         return result;
@@ -64,18 +65,21 @@ public static class AudioDeviceService
     {
         using var enumerator = new MMDeviceEnumerator();
         var devices = enumerator.EnumerateAudioEndPoints(DataFlow.All, DeviceState.Active);
+        bool found = false;
         foreach (var device in devices)
         {
             try
             {
+                if (found) continue; // still iterate to dispose every device
                 var value = device.Properties[PKEY_Device_EnumeratorName].Value;
                 if (value is string enumName
                     && enumName.Contains("BTHENUM", StringComparison.OrdinalIgnoreCase))
-                    return true;
+                    found = true;
             }
             catch { }
+            finally { device.Dispose(); }
         }
-        return false;
+        return found;
     }
 
     public static void SetDefaultDevice(string deviceId)
@@ -97,7 +101,7 @@ public static class AudioDeviceService
         using var enumerator = new MMDeviceEnumerator();
         try
         {
-            var dev = enumerator.GetDefaultAudioEndpoint(dataFlow, Role.Communications);
+            using var dev = enumerator.GetDefaultAudioEndpoint(dataFlow, Role.Communications);
             return (dev.ID, dev.FriendlyName);
         }
         catch (COMException) { return (null, null); }
