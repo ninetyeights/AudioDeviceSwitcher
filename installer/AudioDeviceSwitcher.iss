@@ -4,7 +4,7 @@
 
 #define AppName "Audio Device Switcher"
 #define AppId_Name "AudioDeviceSwitcher"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.1"
 #define AppPublisher "Chester"
 #define AppExeName "AudioDeviceSwitcher.exe"
 #define AppId "{{D7B3F2A1-9E45-4C8B-A0F1-3E5B8C7D2E91}"
