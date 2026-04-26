@@ -42,10 +42,6 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
-      - name: Build installer
-        run: iscc installer\AudioDeviceSwitcher.iss
-        shell: cmd
-
       - name: Derive version from tag
         id: ver
         shell: pwsh
@@ -54,6 +50,10 @@ jobs:
           $ver = $tag -replace '^v',''
           "version=$ver" >> $env:GITHUB_OUTPUT
           "installer=dist/AudioDeviceSwitcher-Setup-$ver.exe" >> $env:GITHUB_OUTPUT
+
+      - name: Build installer
+        run: iscc /DAppVersion=${{ steps.ver.outputs.version }} installer\AudioDeviceSwitcher.iss
+        shell: cmd
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
