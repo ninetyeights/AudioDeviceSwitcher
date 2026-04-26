@@ -24,6 +24,10 @@ public class AppSettings
     public bool NotifyAppDrift { get; set; } = true;
     public bool EnableBlinkAnimation { get; set; } = true;
     public bool StartMinimized { get; set; } = false;
+    public Guid? LockedProfileId { get; set; }
+    public bool VoicemeeterMuteLocked { get; set; }
+    public List<bool> VoicemeeterStripMuteSnapshot { get; set; } = [];
+    public bool VoicemeeterIntegrationEnabled { get; set; } = false;
 }
 
 public static class SettingsService

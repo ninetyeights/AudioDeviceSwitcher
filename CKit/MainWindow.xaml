@@ -4,7 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="&#x97F3;&#x9891;&#x5207;&#x6362;&#x52A9;&#x624B;" Height="720" Width="560"
+        Title="&#x97F3;&#x9891;&#x5207;&#x6362;&#x52A9;&#x624B;" Height="640" Width="760"
         Icon="pack://application:,,,/Resources/app.ico"
         WindowStartupLocation="CenterScreen" ResizeMode="CanResizeWithGrip">
     <Window.Resources>
@@ -131,16 +131,19 @@
         <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <!-- Profiles + Voicemeeter (left/right) -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
         <!-- Profiles Section -->
-        <Border x:Name="ProfileSection" Grid.Row="0" Grid.RowSpan="2" CornerRadius="6" Padding="0"
+        <Border x:Name="ProfileSection" Grid.Column="0" CornerRadius="6" Padding="0"
                 BorderThickness="0" BorderBrush="Transparent" Background="Transparent">
             <StackPanel>
                 <DockPanel>
@@ -190,36 +193,67 @@
             </StackPanel>
         </Border>
 
-        <!-- Playback Devices -->
-        <DockPanel Grid.Row="2">
-            <TextBlock Style="{StaticResource SectionHeader}" Text="&#x64AD;&#x653E;&#x8BBE;&#x5907;" DockPanel.Dock="Left"/>
-            <TextBlock x:Name="PlaybackHiddenCount" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"
-                       Margin="6,0,0,0" DockPanel.Dock="Left" Visibility="Collapsed"/>
-            <CheckBox x:Name="ShowHiddenCheck" Content="&#x663E;&#x793A;&#x5DF2;&#x9690;&#x85CF;" FontSize="11"
-                      Foreground="#6B7280"
-                      VerticalAlignment="Center" Margin="12,0,0,0" DockPanel.Dock="Left"
-                      Checked="ShowHidden_Changed" Unchecked="ShowHidden_Changed"/>
-            <CheckBox x:Name="ShowDisabledCheck" Content="&#x663E;&#x793A;&#x5DF2;&#x7981;&#x7528;" FontSize="11"
-                      Foreground="#6B7280"
-                      VerticalAlignment="Center" Margin="10,0,0,0" DockPanel.Dock="Left"
-                      Checked="ShowDisabled_Changed" Unchecked="ShowDisabled_Changed"/>
-        </DockPanel>
-        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
-            <ItemsControl x:Name="PlaybackList" Margin="0,0,6,0"/>
-        </ScrollViewer>
+        <!-- Voicemeeter Status (right of profiles) -->
+        <StackPanel x:Name="VoicemeeterPanel" Grid.Column="1" Margin="12,0,0,0"
+                    MinWidth="220" MaxWidth="320" VerticalAlignment="Top" Visibility="Collapsed">
+            <DockPanel Margin="0,6,0,4">
+                <Ellipse Width="6" Height="6" Fill="#7C3AED" VerticalAlignment="Center" Margin="0,0,6,0" DockPanel.Dock="Left"/>
+                <Button x:Name="VoicemeeterLockBtn" DockPanel.Dock="Right" Click="VoicemeeterLock_Click"
+                        Padding="6,2" FontSize="13" Cursor="Hand" Background="Transparent"
+                        BorderThickness="0" VerticalAlignment="Center"/>
+                <TextBlock x:Name="VoicemeeterTypeText" Style="{StaticResource SectionHeader}" Margin="0"
+                           Foreground="#5B21B6" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+            </DockPanel>
+            <Border Background="#F5F3FF" BorderBrush="#C4B5FD" BorderThickness="1"
+                    CornerRadius="6" Padding="12,10" Margin="0,4,0,4">
+                <ItemsControl x:Name="VoicemeeterIoList"/>
+            </Border>
+        </StackPanel>
+        </Grid>
 
-        <!-- Recording Devices -->
-        <DockPanel Grid.Row="4" LastChildFill="False">
-            <TextBlock Style="{StaticResource SectionHeader}" Text="&#x5F55;&#x97F3;&#x8BBE;&#x5907;" DockPanel.Dock="Left"/>
-            <TextBlock x:Name="RecordingHiddenCount" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"
-                       Margin="6,0,0,0" DockPanel.Dock="Left" Visibility="Collapsed"/>
-        </DockPanel>
-        <ScrollViewer Grid.Row="5" VerticalScrollBarVisibility="Auto">
-            <ItemsControl x:Name="RecordingList" Margin="0,0,6,0"/>
-        </ScrollViewer>
+        <!-- Playback / Recording Devices (left/right) -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Playback header -->
+            <DockPanel Grid.Row="0" Grid.Column="0">
+                <TextBlock Style="{StaticResource SectionHeader}" Text="&#x64AD;&#x653E;&#x8BBE;&#x5907;" DockPanel.Dock="Left"/>
+                <TextBlock x:Name="PlaybackHiddenCount" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"
+                           Margin="6,0,0,0" DockPanel.Dock="Left" Visibility="Collapsed"/>
+                <CheckBox x:Name="ShowHiddenCheck" Content="&#x663E;&#x793A;&#x5DF2;&#x9690;&#x85CF;" FontSize="11"
+                          Foreground="#6B7280"
+                          VerticalAlignment="Center" Margin="12,0,0,0" DockPanel.Dock="Left"
+                          Checked="ShowHidden_Changed" Unchecked="ShowHidden_Changed"/>
+                <CheckBox x:Name="ShowDisabledCheck" Content="&#x663E;&#x793A;&#x5DF2;&#x7981;&#x7528;" FontSize="11"
+                          Foreground="#6B7280"
+                          VerticalAlignment="Center" Margin="10,0,0,0" DockPanel.Dock="Left"
+                          Checked="ShowDisabled_Changed" Unchecked="ShowDisabled_Changed"/>
+            </DockPanel>
+            <ScrollViewer Grid.Row="1" Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="PlaybackList" Margin="0,0,6,0"/>
+            </ScrollViewer>
+
+            <!-- Recording header -->
+            <DockPanel Grid.Row="0" Grid.Column="2" LastChildFill="False">
+                <TextBlock Style="{StaticResource SectionHeader}" Text="&#x5F55;&#x97F3;&#x8BBE;&#x5907;" DockPanel.Dock="Left"/>
+                <TextBlock x:Name="RecordingHiddenCount" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"
+                           Margin="6,0,0,0" DockPanel.Dock="Left" Visibility="Collapsed"/>
+            </DockPanel>
+            <ScrollViewer Grid.Row="1" Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="RecordingList" Margin="0,0,6,0"/>
+            </ScrollViewer>
+        </Grid>
 
         <!-- Bluetooth Warning -->
-        <Border x:Name="BluetoothWarning" Grid.Row="6" Background="#FFFBEB" BorderBrush="#FCD34D"
+        <Border x:Name="BluetoothWarning" Grid.Row="2" Background="#FFFBEB" BorderBrush="#FCD34D"
                 BorderThickness="1" CornerRadius="4" Padding="10,6" Margin="0,4,0,4" Visibility="Collapsed">
             <StackPanel Orientation="Horizontal">
                 <Ellipse Width="6" Height="6" Fill="#D97706" VerticalAlignment="Center" Margin="0,0,6,0"/>

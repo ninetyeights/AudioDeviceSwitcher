@@ -89,11 +89,14 @@ public partial class MiniWindow : Window
     {
         ProfileList.Items.Clear();
 
-        var profiles = ProfileService.GetAll();
+        var allProfiles = ProfileService.GetAll();
+        var profiles = allProfiles.Where(p => p.ShowInMiniWindow).ToList();
         EmptyHint.Visibility = profiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        var currentPlayback = AudioDeviceService.GetPlaybackDevices().Find(d => d.IsDefault);
-        var currentRecording = AudioDeviceService.GetRecordingDevices().Find(d => d.IsDefault);
+        var allPlayback = AudioDeviceService.GetPlaybackDevices();
+        var allRecording = AudioDeviceService.GetRecordingDevices();
+        var currentPlayback = allPlayback.Find(d => d.IsDefault);
+        var currentRecording = allRecording.Find(d => d.IsDefault);
         var currentPlaybackComm = AudioDeviceService.GetCommunicationsDefault(NAudio.CoreAudioApi.DataFlow.Render);
         var currentRecordingComm = AudioDeviceService.GetCommunicationsDefault(NAudio.CoreAudioApi.DataFlow.Capture);
 
@@ -104,15 +107,12 @@ public partial class MiniWindow : Window
             return nicknames.TryGetValue(id, out var nn) && !string.IsNullOrEmpty(nn) ? nn : null;
         }
 
-        bool anyActive = false;
-
         foreach (var profile in profiles)
         {
             bool isActive = profile.PlaybackDeviceId == currentPlayback?.Id
                          && profile.RecordingDeviceId == currentRecording?.Id
                          && profile.PlaybackDeviceId == currentPlaybackComm.Id
                          && profile.RecordingDeviceId == currentRecordingComm.Id;
-            if (isActive) anyActive = true;
 
             var playNn = NicknameOf(profile.PlaybackDeviceId);
             var recNn = NicknameOf(profile.RecordingDeviceId);
@@ -121,13 +121,58 @@ public partial class MiniWindow : Window
             if (recNn != null) nicknameParts.Add($"\u25CF {recNn}");
             string? nicknameLine = nicknameParts.Count > 0 ? string.Join("  ", nicknameParts) : null;
 
+            bool playbackMissing = !string.IsNullOrEmpty(profile.PlaybackDeviceId)
+                && !allPlayback.Any(d => string.Equals(d.Id, profile.PlaybackDeviceId, StringComparison.Ordinal));
+            bool recordingMissing = !string.IsNullOrEmpty(profile.RecordingDeviceId)
+                && !allRecording.Any(d => string.Equals(d.Id, profile.RecordingDeviceId, StringComparison.Ordinal));
+            var missingNotes = new List<string>();
+            if (playbackMissing) missingNotes.Add($"播放: {profile.PlaybackDeviceName ?? "未知"} (未连接)");
+            if (recordingMissing) missingNotes.Add($"录音: {profile.RecordingDeviceName ?? "未知"} (未连接)");
+
+            bool isLocked = SettingsService.Load().LockedProfileId == profile.Id;
+
             var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            if (!string.IsNullOrEmpty(profile.Color))
+            {
+                try
+                {
+                    var c = (Color)ColorConverter.ConvertFromString(profile.Color);
+                    panel.Children.Add(new System.Windows.Shapes.Ellipse
+                    {
+                        Width = 8,
+                        Height = 8,
+                        Fill = new SolidColorBrush(c),
+                        Margin = new Thickness(0, 0, 6, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                    });
+                }
+                catch { }
+            }
+            if (isLocked)
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "\U0001F512 ",
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xD9, 0x77, 0x06)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
             if (isActive)
             {
                 panel.Children.Add(new TextBlock
                 {
                     Text = "\u2714 ",
                     Foreground = new SolidColorBrush(Color.FromRgb(0x10, 0x9E, 0x7A)),
+                    FontWeight = FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+            if (missingNotes.Count > 0)
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "⚠ ",
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xD3, 0x2F, 0x2F)),
                     FontWeight = FontWeights.SemiBold,
                     VerticalAlignment = VerticalAlignment.Center,
                 });
@@ -145,8 +190,10 @@ public partial class MiniWindow : Window
                 Style = (Style)FindResource(isActive ? "MiniActiveProfileButton" : "MiniProfileButton"),
                 HorizontalContentAlignment = HorizontalAlignment.Left,
             };
-            if (nicknameLine != null)
-                btn.ToolTip = nicknameLine;
+            var tipParts = new List<string>();
+            if (nicknameLine != null) tipParts.Add(nicknameLine);
+            if (missingNotes.Count > 0) tipParts.Add(string.Join("\n", missingNotes));
+            if (tipParts.Count > 0) btn.ToolTip = string.Join("\n\n", tipParts);
             btn.Click += ProfileButton_Click;
             ProfileList.Items.Add(btn);
         }
@@ -155,8 +202,14 @@ public partial class MiniWindow : Window
         bool hasBluetooth = AudioDeviceService.HasBluetoothDevice();
         BluetoothWarning.Visibility = hasBluetooth ? Visibility.Visible : Visibility.Collapsed;
 
-        // Profile mismatch warning
-        bool showWarning = profiles.Count > 0 && !anyActive;
+        // Profile mismatch warning — consider hidden profiles too so hiding the
+        // currently-active one doesn't make the warning blink.
+        bool anyActiveAcrossAll = allProfiles.Any(p =>
+            p.PlaybackDeviceId == currentPlayback?.Id
+            && p.RecordingDeviceId == currentRecording?.Id
+            && p.PlaybackDeviceId == currentPlaybackComm.Id
+            && p.RecordingDeviceId == currentRecordingComm.Id);
+        bool showWarning = allProfiles.Count > 0 && !anyActiveAcrossAll;
         WarningText.Visibility = showWarning ? Visibility.Visible : Visibility.Collapsed;
         WarningText.Tag = (showWarning && SettingsService.Load().EnableBlinkAnimation) ? "Blink" : null;
 
@@ -189,6 +242,8 @@ public partial class MiniWindow : Window
 
         var profile = ProfileService.GetAll().Find(p => p.Id == id);
         if (profile == null) return;
+
+        if (!((App)Application.Current).TryUserApplyProfile(profile)) return;
 
         try
         {

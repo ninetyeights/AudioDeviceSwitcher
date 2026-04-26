@@ -14,12 +14,30 @@ public partial class ProfileEditDialog : Window
     public int HotkeyModifiers { get; private set; }
     public int HotkeyKey { get; private set; }
     public List<AppOverride> AppOverrides { get; private set; } = [];
+    public bool RestartVoicemeeter => VoicemeeterRestartCheck.IsChecked == true;
+    public bool ShowInMiniWindow => ShowInMiniWindowCheck.IsChecked == true;
+    public string? SelectedColor { get; private set; }
+
+    private static readonly (string? Hex, string Tooltip)[] ColorOptions =
+    [
+        (null, "无"),
+        ("#3B82F6", "蓝"),
+        ("#10B981", "绿"),
+        ("#EF4444", "红"),
+        ("#F59E0B", "黄"),
+        ("#8B5CF6", "紫"),
+        ("#EC4899", "粉"),
+        ("#6B7280", "灰"),
+    ];
 
     public ProfileEditDialog(
         string? existingName = null,
         int modifiers = 0,
         int key = 0,
-        List<AppOverride>? existingOverrides = null)
+        List<AppOverride>? existingOverrides = null,
+        bool restartVoicemeeter = false,
+        bool showInMiniWindow = true,
+        string? color = null)
     {
         InitializeComponent();
         if (existingName != null)
@@ -32,9 +50,73 @@ public partial class ProfileEditDialog : Window
         if (existingOverrides != null)
             AppOverrides = existingOverrides.Select(o => new AppOverride { ExePath = o.ExePath, AppProfileId = o.AppProfileId }).ToList();
 
+        VoicemeeterRestartCheck.IsChecked = restartVoicemeeter;
+        // Hide if user opted out of Voicemeeter integration entirely.
+        if (!SettingsService.Load().VoicemeeterIntegrationEnabled)
+            VoicemeeterRestartCheck.Visibility = Visibility.Collapsed;
+        ShowInMiniWindowCheck.IsChecked = showInMiniWindow;
+        SelectedColor = color;
+        BuildColorPicker();
+
         RefreshOverrideList();
 
         Loaded += (_, _) => { NameBox.Focus(); NameBox.SelectAll(); };
+    }
+
+    private void BuildColorPicker()
+    {
+        ColorPicker.Children.Clear();
+        foreach (var (hex, tooltip) in ColorOptions)
+        {
+            var swatch = new Border
+            {
+                Width = 22,
+                Height = 22,
+                CornerRadius = new CornerRadius(11),
+                BorderThickness = new Thickness(2),
+                Margin = new Thickness(0, 0, 6, 0),
+                Cursor = Cursors.Hand,
+                ToolTip = tooltip,
+                Tag = hex,
+            };
+            if (hex == null)
+            {
+                swatch.Background = Brushes.White;
+                swatch.Child = new TextBlock
+                {
+                    Text = "/",
+                    FontSize = 14,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x9C, 0xA3, 0xAF)),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+            }
+            else
+            {
+                swatch.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+            }
+            UpdateSwatchBorder(swatch, hex == SelectedColor);
+            swatch.MouseLeftButtonUp += ColorSwatch_Click;
+            ColorPicker.Children.Add(swatch);
+        }
+    }
+
+    private static void UpdateSwatchBorder(Border swatch, bool selected)
+    {
+        swatch.BorderBrush = selected
+            ? new SolidColorBrush(Color.FromRgb(0x11, 0x18, 0x27))
+            : new SolidColorBrush(Color.FromRgb(0xE5, 0xE7, 0xEB));
+    }
+
+    private void ColorSwatch_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border picked) return;
+        SelectedColor = picked.Tag as string;
+        foreach (var child in ColorPicker.Children)
+        {
+            if (child is Border b)
+                UpdateSwatchBorder(b, (b.Tag as string) == SelectedColor);
+        }
     }
 
     private void RefreshOverrideList()

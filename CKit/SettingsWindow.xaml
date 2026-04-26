@@ -9,6 +9,8 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -32,8 +34,18 @@
 
         <Separator Grid.Row="3" Margin="0,12,0,12"/>
 
-        <!-- 启动 -->
+        <!-- 集成 -->
         <StackPanel Grid.Row="4">
+            <TextBlock Text="集成" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <CheckBox x:Name="ChkVoicemeeterEnabled" Content="启用 Voicemeeter 集成" Margin="0,2"/>
+            <TextBlock Text="未安装 Voicemeeter 时关闭，可避免无效的 DLL 加载和轮询。"
+                       FontSize="11" Foreground="#777" Margin="20,0,0,0"/>
+        </StackPanel>
+
+        <Separator Grid.Row="5" Margin="0,12,0,12"/>
+
+        <!-- 启动 -->
+        <StackPanel Grid.Row="6">
             <TextBlock Text="启动" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
             <CheckBox x:Name="ChkStartMinimized" Content="启动时最小化到托盘" Margin="0,2"/>
             <Button Content="打开数据目录 (%AppData%\AudioDeviceSwitcher)" Padding="10,4" HorizontalAlignment="Left"
@@ -41,7 +53,7 @@
         </StackPanel>
 
         <!-- 按钮 -->
-        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="取消" Padding="16,6" Margin="0,0,8,0" Click="Cancel_Click" IsCancel="True"/>
             <Button Content="保存" Padding="16,6" Click="Save_Click" IsDefault="True"/>
         </StackPanel>

@@ -6,28 +6,48 @@ namespace AudioDeviceSwitcher;
 
 public record ProfileApplyResult(
     int AppliedOverrideCount,
-    List<string> SkippedAppNames);
+    List<string> SkippedAppNames,
+    List<string> MissingDeviceNames,
+    VoicemeeterRestartStatus VoicemeeterStatus);
 
 public static class ProfileApplyService
 {
     public static ProfileApplyResult Apply(DeviceProfile profile)
     {
-        var currentPlayback = AudioDeviceService.GetPlaybackDevices().Find(d => d.IsDefault);
-        var currentRecording = AudioDeviceService.GetRecordingDevices().Find(d => d.IsDefault);
+        var allPlayback = AudioDeviceService.GetPlaybackDevices();
+        var allRecording = AudioDeviceService.GetRecordingDevices();
+        var currentPlayback = allPlayback.Find(d => d.IsDefault);
+        var currentRecording = allRecording.Find(d => d.IsDefault);
         var currentPlaybackComm = AudioDeviceService.GetCommunicationsDefault(DataFlow.Render);
         var currentRecordingComm = AudioDeviceService.GetCommunicationsDefault(DataFlow.Capture);
+
+        // Skip devices not in the active set (e.g. bluetooth headphones disconnected).
+        // COM SetDefaultEndpoint silently no-ops for such ids — without this guard the
+        // user sees a "switched" toast while nothing actually changed.
+        bool playbackAvailable = profile.PlaybackDeviceId != null
+            && allPlayback.Any(d => string.Equals(d.Id, profile.PlaybackDeviceId, StringComparison.Ordinal));
+        bool recordingAvailable = profile.RecordingDeviceId != null
+            && allRecording.Any(d => string.Equals(d.Id, profile.RecordingDeviceId, StringComparison.Ordinal));
+
+        var missing = new List<string>();
+        if (profile.PlaybackDeviceId != null && !playbackAvailable)
+            missing.Add($"播放: {profile.PlaybackDeviceName ?? "未知"}");
+        if (profile.RecordingDeviceId != null && !recordingAvailable)
+            missing.Add($"录音: {profile.RecordingDeviceName ?? "未知"}");
+
         bool defaultsMatch = profile.PlaybackDeviceId == currentPlayback?.Id
                           && profile.RecordingDeviceId == currentRecording?.Id
                           && profile.PlaybackDeviceId == currentPlaybackComm.Id
                           && profile.RecordingDeviceId == currentRecordingComm.Id;
         // Skip only when system defaults match AND no AppOverride has drifted.
         // If anything drifted, re-run so user-triggered re-apply actually fixes them.
-        if (defaultsMatch && !HasDriftedOverrides(profile)) return new ProfileApplyResult(0, []);
+        if (defaultsMatch && !HasDriftedOverrides(profile))
+            return new ProfileApplyResult(0, [], missing, VoicemeeterRestartStatus.NotRequested);
 
-        if (profile.PlaybackDeviceId != null)
-            AudioDeviceService.SetDefaultDevice(profile.PlaybackDeviceId);
-        if (profile.RecordingDeviceId != null)
-            AudioDeviceService.SetDefaultDevice(profile.RecordingDeviceId);
+        if (playbackAvailable)
+            AudioDeviceService.SetDefaultDevice(profile.PlaybackDeviceId!);
+        if (recordingAvailable)
+            AudioDeviceService.SetDefaultDevice(profile.RecordingDeviceId!);
 
         // Reset apps managed by other profiles but not by this one — back to follow-system.
         // Apps never referenced by any profile stay untouched.
@@ -99,7 +119,11 @@ public static class ProfileApplyService
             }
         }
 
-        return new ProfileApplyResult(applied, skipped);
+        var voicemeeterStatus = profile.RestartVoicemeeterAfterApply
+            ? VoicemeeterService.RestartAudioEngine()
+            : VoicemeeterRestartStatus.NotRequested;
+
+        return new ProfileApplyResult(applied, skipped, missing, voicemeeterStatus);
     }
 
     public static bool HasDriftedOverrides(DeviceProfile profile)

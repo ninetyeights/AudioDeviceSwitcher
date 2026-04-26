@@ -14,6 +14,10 @@ public record DeviceProfile
     public int HotkeyModifiers { get; set; }
     public int HotkeyKey { get; set; }
     public List<AppOverride> AppOverrides { get; set; } = [];
+    public bool RestartVoicemeeterAfterApply { get; set; }
+    public bool ShowInMiniWindow { get; set; } = true;
+    public int Order { get; set; }
+    public string? Color { get; set; }
 }
 
 public record AppOverride
@@ -40,7 +44,9 @@ public static class ProfileService
             return [];
 
         var json = File.ReadAllText(ProfilePath);
-        return JsonSerializer.Deserialize<List<DeviceProfile>>(json, JsonOptions) ?? [];
+        var list = JsonSerializer.Deserialize<List<DeviceProfile>>(json, JsonOptions) ?? [];
+        // Stable sort: profiles without an explicit Order keep their JSON order.
+        return list.OrderBy(p => p.Order).ToList();
     }
 
     public static void Save(DeviceProfile profile)
@@ -50,8 +56,16 @@ public static class ProfileService
         if (index >= 0)
             profiles[index] = profile;
         else
+        {
+            profile.Order = profiles.Count == 0 ? 1 : profiles.Max(p => p.Order) + 1;
             profiles.Add(profile);
+        }
 
+        WriteAll(profiles);
+    }
+
+    public static void SaveAll(List<DeviceProfile> profiles)
+    {
         WriteAll(profiles);
     }
 

@@ -111,7 +111,9 @@ public partial class App : Application
         _trayIcon.DoubleClick += (_, _) => ShowMainWindow();
 
         // Event-driven (instant) via Windows audio COM notifications.
-        _deviceNotifier = new DeviceChangeNotifier(CheckDeviceChanges);
+        // The "immediate" callback runs on the UI thread without debounce specifically
+        // for lock enforcement so external default-device changes are reverted ASAP.
+        _deviceNotifier = new DeviceChangeNotifier(CheckDeviceChanges, EnforceLockedProfileImmediately);
 
         // Low-frequency safety net: covers any missed events and refreshes app-drift state
         // (which depends on external process lifecycle, not just device COM events).
@@ -176,13 +178,47 @@ public partial class App : Application
 
         var body = $"播放: {Resolve(profile.PlaybackDeviceId, profile.PlaybackDeviceName)}\n"
                  + $"录音: {Resolve(profile.RecordingDeviceId, profile.RecordingDeviceName)}";
-        bool warning = result.SkippedAppNames.Count > 0;
-        if (warning)
+        if (result.SkippedAppNames.Count > 0)
         {
             var names = string.Join(", ", result.SkippedAppNames.Distinct(StringComparer.OrdinalIgnoreCase));
             body += $"\n\n{result.SkippedAppNames.Count} 个应用未运行，已跳过: {names}";
         }
-        ToastService.Show(ToastService.TagProfileSwitch, $"已切换到 {profile.Name}", body);
+
+        // If every device in the profile is offline (e.g. bluetooth disconnected), nothing was switched.
+        bool hasPlayback = profile.PlaybackDeviceId != null;
+        bool hasRecording = profile.RecordingDeviceId != null;
+        int targetCount = (hasPlayback ? 1 : 0) + (hasRecording ? 1 : 0);
+        bool allMissing = targetCount > 0 && result.MissingDeviceNames.Count == targetCount;
+
+        string title;
+        if (allMissing)
+        {
+            title = $"切换失败: {profile.Name}";
+            body += $"\n\n以下设备未连接或未启用，未执行切换:\n{string.Join("\n", result.MissingDeviceNames)}";
+        }
+        else
+        {
+            title = $"已切换到 {profile.Name}";
+            if (result.MissingDeviceNames.Count > 0)
+                body += $"\n\n以下设备未连接或未启用，已跳过:\n{string.Join("\n", result.MissingDeviceNames)}";
+        }
+
+        switch (result.VoicemeeterStatus)
+        {
+            case VoicemeeterRestartStatus.Restarted:
+                body += "\n\nVoicemeeter 音频引擎已重启";
+                break;
+            case VoicemeeterRestartStatus.NotRunning:
+                body += "\n\nVoicemeeter 未运行，已跳过引擎重启";
+                break;
+            case VoicemeeterRestartStatus.NotInstalled:
+                body += "\n\n未检测到 Voicemeeter 安装，已跳过引擎重启";
+                break;
+            case VoicemeeterRestartStatus.Failed:
+                body += "\n\nVoicemeeter 引擎重启失败";
+                break;
+        }
+        ToastService.Show(ToastService.TagProfileSwitch, title, body);
     }
 
     public void MarkOwnChange()
@@ -209,6 +245,35 @@ public partial class App : Application
         var recordingComm = AudioDeviceService.GetCommunicationsDefault(NAudio.CoreAudioApi.DataFlow.Capture);
         var bluetooth = AudioDeviceService.HasBluetoothDevice();
 
+        var settings = SettingsService.Load();
+        bool inSuppressionWindowEarly = DateTime.Now < _suppressDeviceBalloonUntil;
+
+        // Lock enforcement: if a profile is locked and the system has drifted away from it,
+        // re-apply silently. Runs even on first poll so the lock survives across app restarts.
+        if (!inSuppressionWindowEarly && settings.LockedProfileId is Guid lockedId)
+        {
+            var locked = ProfileService.GetAll().Find(p => p.Id == lockedId);
+            if (locked != null && IsLockedDrifted(locked, playback, recording, playbackComm, recordingComm)
+                && AreLockedDevicesAvailable(locked))
+            {
+                try
+                {
+                    ProfileApplyService.Apply(locked);
+                    MarkOwnChange();
+                    if (settings.NotifyDeviceChanged)
+                        ToastService.Show(ToastService.TagDeviceChange,
+                            $"已锁定到 {locked.Name}",
+                            "外部切换已自动恢复");
+                }
+                catch { }
+                // Re-read post-apply state for downstream logic.
+                playback = AudioDeviceService.GetPlaybackDevices().Find(d => d.IsDefault);
+                recording = AudioDeviceService.GetRecordingDevices().Find(d => d.IsDefault);
+                playbackComm = AudioDeviceService.GetCommunicationsDefault(NAudio.CoreAudioApi.DataFlow.Render);
+                recordingComm = AudioDeviceService.GetCommunicationsDefault(NAudio.CoreAudioApi.DataFlow.Capture);
+            }
+        }
+
         if (_firstPoll)
         {
             _knownPlaybackId = playback?.Id;
@@ -219,8 +284,6 @@ public partial class App : Application
             _firstPoll = false;
             return;
         }
-
-        var settings = SettingsService.Load();
 
         if (bluetooth != _knownBluetooth)
         {
@@ -325,6 +388,115 @@ public partial class App : Application
                 $"{newlyDrifted.Count} \u4E2A\u5E94\u7528\u5DF2\u504F\u79BB\u914D\u7F6E",
                 string.Join(", ", newlyDrifted));
         }
+
+        // Locked profile auto-fixes app override drift too.
+        if (drifted.Count > 0 && SettingsService.Load().LockedProfileId == active.Id
+            && DateTime.Now >= _suppressDeviceBalloonUntil)
+        {
+            try { ProfileApplyService.Apply(active); MarkOwnChange(); }
+            catch { }
+            _knownDriftedApps.Clear();
+        }
+    }
+
+    // True if a profile lock is active right now (any profile).
+    public bool IsAnyProfileLocked() => SettingsService.Load().LockedProfileId.HasValue;
+
+    // Returns true if a manual single-device change is allowed; refuses if any profile
+    // is locked (the change would drift the lock and immediately revert anyway).
+    public bool TryUserChangeDevice()
+    {
+        var settings = SettingsService.Load();
+        if (settings.LockedProfileId is Guid lid)
+        {
+            var locked = ProfileService.GetAll().Find(p => p.Id == lid);
+            ToastService.Show(ToastService.TagDeviceChange,
+                "切换被阻止",
+                $"已锁定到 {locked?.Name ?? "当前配置"}，请先解锁");
+            return false;
+        }
+        return true;
+    }
+
+    // Returns true if the user-initiated apply is allowed; otherwise the lock is active
+    // for a different profile and we refuse the switch outright (with a tray notification).
+    public bool TryUserApplyProfile(DeviceProfile profile)
+    {
+        var settings = SettingsService.Load();
+        if (settings.LockedProfileId is Guid lid && lid != profile.Id)
+        {
+            var locked = ProfileService.GetAll().Find(p => p.Id == lid);
+            ToastService.Show(ToastService.TagProfileSwitch,
+                "切换被阻止",
+                $"已锁定到 {locked?.Name ?? "当前配置"}，请先解锁");
+            return false;
+        }
+        return true;
+    }
+
+    // Fast-path called directly from IMMNotificationClient.OnDefaultDeviceChanged on the
+    // UI thread. Reverts immediately when the locked profile drifts, no 150ms debounce.
+    private void EnforceLockedProfileImmediately()
+    {
+        var settings = SettingsService.Load();
+        if (settings.LockedProfileId is not Guid lid) return;
+        if (DateTime.Now < _suppressDeviceBalloonUntil) return;
+
+        var locked = ProfileService.GetAll().Find(p => p.Id == lid);
+        if (locked == null) return;
+        if (!AreLockedDevicesAvailable(locked)) return;
+
+        var playback = AudioDeviceService.GetPlaybackDevices().Find(d => d.IsDefault);
+        var recording = AudioDeviceService.GetRecordingDevices().Find(d => d.IsDefault);
+        var playbackComm = AudioDeviceService.GetCommunicationsDefault(NAudio.CoreAudioApi.DataFlow.Render);
+        var recordingComm = AudioDeviceService.GetCommunicationsDefault(NAudio.CoreAudioApi.DataFlow.Capture);
+        if (!IsLockedDrifted(locked, playback, recording, playbackComm, recordingComm)) return;
+
+        // Reserve the suppression window before Apply so that re-entrant
+        // OnDefaultDeviceChanged events triggered by our own SetDefaultEndpoint won't
+        // recurse into another full Apply cycle.
+        _suppressDeviceBalloonUntil = DateTime.Now.AddMilliseconds(1500);
+        try
+        {
+            ProfileApplyService.Apply(locked);
+            MarkOwnChange();
+            if (settings.NotifyDeviceChanged)
+                ToastService.Show(ToastService.TagDeviceChange,
+                    $"已锁定到 {locked.Name}",
+                    "外部切换已自动恢复");
+        }
+        catch { }
+    }
+
+    private static bool IsLockedDrifted(DeviceProfile p, AudioDeviceInfo? playback, AudioDeviceInfo? recording,
+        (string? Id, string? Name) playbackComm, (string? Id, string? Name) recordingComm)
+    {
+        if (!string.IsNullOrEmpty(p.PlaybackDeviceId))
+        {
+            if (p.PlaybackDeviceId != playback?.Id) return true;
+            if (p.PlaybackDeviceId != playbackComm.Id) return true;
+        }
+        if (!string.IsNullOrEmpty(p.RecordingDeviceId))
+        {
+            if (p.RecordingDeviceId != recording?.Id) return true;
+            if (p.RecordingDeviceId != recordingComm.Id) return true;
+        }
+        return false;
+    }
+
+    private static bool AreLockedDevicesAvailable(DeviceProfile p)
+    {
+        if (!string.IsNullOrEmpty(p.PlaybackDeviceId))
+        {
+            var all = AudioDeviceService.GetPlaybackDevices();
+            if (!all.Any(d => string.Equals(d.Id, p.PlaybackDeviceId, StringComparison.Ordinal))) return false;
+        }
+        if (!string.IsNullOrEmpty(p.RecordingDeviceId))
+        {
+            var all = AudioDeviceService.GetRecordingDevices();
+            if (!all.Any(d => string.Equals(d.Id, p.RecordingDeviceId, StringComparison.Ordinal))) return false;
+        }
+        return true;
     }
 
     private void ShowMainWindow()
@@ -371,6 +543,7 @@ public partial class App : Application
         _showSignal?.Dispose();
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();
+        VoicemeeterService.Shutdown();
         Shutdown();
     }
 }

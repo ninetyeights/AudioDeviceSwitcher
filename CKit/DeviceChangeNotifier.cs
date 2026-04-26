@@ -12,12 +12,14 @@ public class DeviceChangeNotifier : IMMNotificationClient, IDisposable
 {
     private readonly MMDeviceEnumerator _enumerator = new();
     private readonly Action _onChange;
+    private readonly Action? _onDefaultChangedImmediate;
     private readonly DispatcherTimer _debounce;
     private bool _registered;
 
-    public DeviceChangeNotifier(Action onChange)
+    public DeviceChangeNotifier(Action onChange, Action? onDefaultChangedImmediate = null)
     {
         _onChange = onChange;
+        _onDefaultChangedImmediate = onDefaultChangedImmediate;
         _debounce = new DispatcherTimer(DispatcherPriority.Background, Application.Current.Dispatcher)
         {
             Interval = TimeSpan.FromMilliseconds(150),
@@ -35,7 +37,16 @@ public class DeviceChangeNotifier : IMMNotificationClient, IDisposable
     public void OnDeviceStateChanged(string deviceId, DeviceState newState) => Kick();
     public void OnDeviceAdded(string pwstrDeviceId) => Kick();
     public void OnDeviceRemoved(string deviceId) => Kick();
-    public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId) => Kick();
+    public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
+    {
+        // Fire the lock-enforcement callback first, with no debounce — this lets a locked
+        // profile snap the default back before the user perceives the switch in mmsys.cpl.
+        if (_onDefaultChangedImmediate != null)
+        {
+            Application.Current.Dispatcher.BeginInvoke(_onDefaultChangedImmediate, DispatcherPriority.Send);
+        }
+        Kick();
+    }
     public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key)
     {
         // Ignored — very noisy (fires on volume, format, etc.). We only care about structural changes.
