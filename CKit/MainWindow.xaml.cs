@@ -33,6 +33,9 @@ public partial class MainWindow : Window
     private MiniWindow? _miniWindow;
     private HotkeyService? _hotkeyService;
     private bool _forceClose;
+    // Read from the Voicemeeter poll thread to decide whether to push UI updates —
+    // a plain field avoids cross-thread access to the IsVisible DependencyProperty.
+    private volatile bool _windowShown;
     private string _lastStateSignature = "";
     private string? _selectedPlaybackId;
     private string? _selectedRecordingId;
@@ -63,7 +66,30 @@ public partial class MainWindow : Window
     // state right after our write, so we trust this for a short window.
     private readonly Dictionary<int, (bool Muted, DateTime When)> _pendingMuteWrites = new();
     private static readonly TimeSpan PendingMuteWindow = TimeSpan.FromSeconds(2);
+    // Same idea for device picks: Voicemeeter's device.name read lags the actual swap
+    // by up to a couple seconds, so show the device the user just picked until the
+    // readback catches up (or the safety window elapses).
+    private readonly Dictionary<(bool IsInput, int Index), (string Name, DateTime When)> _pendingDeviceWrites = new();
+    private static readonly TimeSpan PendingDeviceWindow = TimeSpan.FromSeconds(6);
     private VoicemeeterIoState? _lastVoicemeeterState;
+    // Last rendered VM signature — lets the locked-mode periodic re-check skip a UI
+    // rebuild when nothing actually changed.
+    private string _vmRenderSig = "";
+    // Slots whose device restore failed (device gone, or Voicemeeter rejected the set):
+    // key "S<idx>"/"B<idx>" -> the target we gave up on. Prevents an unrestorable slot
+    // from being hammered every poll (which blanks/cycles the device). Cleared when the
+    // lock is toggled or the snapshot is recaptured.
+    private static readonly Dictionary<string, string> _deviceRestoreGaveUp = new();
+    // After a successful restore the device.name readback lags >1s; suppress re-issuing
+    // the same set for a short window so EnforceVoicemeeterLock doesn't spam it (and
+    // briefly flash the drifted device) on every poll while the swap propagates.
+    private static readonly Dictionary<string, (string Target, DateTime When)> _recentRestore = new();
+    private static readonly TimeSpan RecentRestoreWindow = TimeSpan.FromSeconds(3);
+    // Last device the user picked via the select menu, per slot ("S<idx>"/"B<idx>").
+    // Voicemeeter's API can't report which driver is active and the same device is
+    // enumerated under MME/WDM/KS with the same name, so without this every matching
+    // driver entry would show checked. UI-thread only.
+    private static readonly Dictionary<string, (int Type, string Name)> _lastPickedVmDevice = new();
 
     public MainWindow()
     {
@@ -84,6 +110,11 @@ public partial class MainWindow : Window
                     SetWindowPos(hwnd, IntPtr.Zero, (int)l, (int)t, 0, 0,
                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
+
+            // StartMinimized never fires IsVisibleChanged, so the poll loop that
+            // enforces the Voicemeeter mute lock would never start. Kick it off here
+            // if the lock was left on across restarts.
+            if (s.VoicemeeterMuteLocked) StartVoicemeeterPolling();
         };
         LoadProfiles();
         LoadDevices();
@@ -92,8 +123,10 @@ public partial class MainWindow : Window
             SaveSettings();
             if (!_forceClose)
             {
+                // X button minimizes to the taskbar instead of closing/hiding.
+                // Real exit is only via the tray menu (sets _forceClose).
                 e.Cancel = true;
-                Hide();
+                WindowState = WindowState.Minimized;
             }
         };
         // Only save during user drags (mouse held). DPI-adjust LocationChanged fires
@@ -108,6 +141,7 @@ public partial class MainWindow : Window
         };
         IsVisibleChanged += (_, _) =>
         {
+            _windowShown = IsVisible;
             if (IsVisible)
             {
                 _lastStateSignature = "";
@@ -117,7 +151,9 @@ public partial class MainWindow : Window
             }
             else
             {
-                StopVoicemeeterPolling();
+                // Keep the poll loop alive while the mute lock is on so external
+                // Voicemeeter changes are still reverted after hiding to tray.
+                if (!SettingsService.Load().VoicemeeterMuteLocked) StopVoicemeeterPolling();
                 StopPeakMetering();
             }
         };
@@ -263,19 +299,35 @@ public partial class MainWindow : Window
 
     private void VoicemeeterPollLoop(CancellationToken token)
     {
+        var sw = Stopwatch.StartNew();
+        long lastFullMs = -100000;
         while (!token.IsCancellationRequested)
         {
+            bool locked = false;
             try
             {
-                if (VoicemeeterService.IsParametersDirty())
+                locked = SettingsService.Load().VoicemeeterMuteLocked;
+                bool dirty = VoicemeeterService.IsParametersDirty();
+                // When locked, re-evaluate on a steady cadence even without a dirty
+                // edge: device.name lags the swap by ~1s, so an external change is
+                // usually NOT yet visible on the single poll its dirty flag triggers,
+                // and the flag is consumed before the readback catches up.
+                bool forced = locked && (sw.ElapsedMilliseconds - lastFullMs) >= 750;
+                if (dirty || forced)
                 {
+                    lastFullMs = sw.ElapsedMilliseconds;
                     var state = VoicemeeterService.GetIoState();
                     if (state != null) state = EnforceVoicemeeterLock(state);
-                    Dispatcher.BeginInvoke(() => RenderVoicemeeterStatus(state));
+                    // Enforcement runs regardless; only rebuild UI when it's visible
+                    // and something actually changed (avoid 750ms flicker/rebuild).
+                    var sig = VmSignature(state);
+                    if (_windowShown && (dirty || sig != _vmRenderSig))
+                        Dispatcher.BeginInvoke(() => RenderVoicemeeterStatus(state));
+                    _vmRenderSig = sig;
                 }
             }
             catch { }
-            int interval = SettingsService.Load().VoicemeeterMuteLocked ? 50 : 1500;
+            int interval = locked ? 50 : 1500;
             if (token.WaitHandle.WaitOne(interval)) break;
         }
     }
@@ -474,33 +526,170 @@ public partial class MainWindow : Window
         });
     }
 
-    // If the Voicemeeter mute lock is on, push our snapshot back to the engine for any
-    // strip whose mute state has drifted, then patch the returned state to reflect the
-    // restored values so the UI doesn't briefly flash the drifted state.
+    // When the lock is on, push our snapshot back to the engine for any Strip mute or
+    // Strip/Bus device routing that has drifted, then patch the returned state so the UI
+    // doesn't briefly flash the drifted value.
     private static VoicemeeterIoState EnforceVoicemeeterLock(VoicemeeterIoState state)
     {
         var settings = SettingsService.Load();
         if (!settings.VoicemeeterMuteLocked) return state;
-        var snap = settings.VoicemeeterStripMuteSnapshot;
-        if (snap == null || snap.Count == 0) return state;
 
-        bool anyDrift = false;
+        // Legacy / restarted lock: the lock was turned on before this feature existed
+        // (or persisted across a restart) so the device snapshot is empty. Capture the
+        // current routing once instead of forcing the user to unlock + re-lock.
+        if (settings.VoicemeeterStripDeviceSnapshot.Count == 0
+            && settings.VoicemeeterBusDeviceSnapshot.Count == 0
+            && (state.Inputs.Count > 0 || state.Outputs.Count > 0))
+        {
+            settings.VoicemeeterStripDeviceSnapshot = state.Inputs.Select(s => s.DeviceName ?? "").ToList();
+            settings.VoicemeeterBusDeviceSnapshot = state.Outputs.Select(s => s.DeviceName ?? "").ToList();
+            if (settings.VoicemeeterStripMuteSnapshot.Count == 0)
+                settings.VoicemeeterStripMuteSnapshot = state.Inputs.Select(s => s.Muted).ToList();
+            SettingsService.Save();
+            ResetDeviceRestoreState();
+            VoicemeeterService.LogExternal("EnforceVoicemeeterLock: auto-captured device snapshot "
+                + $"(strips=[{string.Join(" | ", settings.VoicemeeterStripDeviceSnapshot)}] "
+                + $"buses=[{string.Join(" | ", settings.VoicemeeterBusDeviceSnapshot)}])");
+        }
+
+        var muteSnap = settings.VoicemeeterStripMuteSnapshot;
+        var stripDevSnap = settings.VoicemeeterStripDeviceSnapshot;
+        var busDevSnap = settings.VoicemeeterBusDeviceSnapshot;
+
+        bool inputsChanged = false;
         var newInputs = new List<VoicemeeterIoSlot>(state.Inputs.Count);
         for (int i = 0; i < state.Inputs.Count; i++)
         {
             var slot = state.Inputs[i];
-            if (i < snap.Count && slot.Muted != snap[i])
+
+            if (muteSnap != null && i < muteSnap.Count && slot.Muted != muteSnap[i])
             {
-                try { VoicemeeterService.SetStripMute(slot.Index, snap[i]); } catch { }
-                anyDrift = true;
-                newInputs.Add(slot with { Muted = snap[i] });
+                try { VoicemeeterService.SetStripMute(slot.Index, muteSnap[i]); } catch { }
+                slot = slot with { Muted = muteSnap[i] };
+                inputsChanged = true;
             }
-            else
+
+            // Empty snapshot entry = slot had no device when locked; don't force-clear.
+            // Virtual inputs have no hardware device to restore — only enforce their mute.
+            if (stripDevSnap != null && i < stripDevSnap.Count
+                && !string.IsNullOrEmpty(stripDevSnap[i])
+                && !slot.IsVirtual
+                && !DeviceNameMatches(slot.DeviceName, stripDevSnap[i])
+                && TryRestoreLockedDevice(true, slot.Index, stripDevSnap[i]))
             {
-                newInputs.Add(slot);
+                // Show the intended locked device; it's the user's pick, not "missing" —
+                // the red flag here reflected the (transient) drifted device, not this one.
+                slot = slot with { DeviceName = stripDevSnap[i], DeviceMissing = false };
+                inputsChanged = true;
             }
+
+            newInputs.Add(slot);
         }
-        return anyDrift ? state with { Inputs = newInputs } : state;
+
+        bool outputsChanged = false;
+        var newOutputs = new List<VoicemeeterIoSlot>(state.Outputs.Count);
+        for (int i = 0; i < state.Outputs.Count; i++)
+        {
+            var slot = state.Outputs[i];
+            if (busDevSnap != null && i < busDevSnap.Count
+                && !string.IsNullOrEmpty(busDevSnap[i])
+                && !DeviceNameMatches(slot.DeviceName, busDevSnap[i])
+                && TryRestoreLockedDevice(false, slot.Index, busDevSnap[i]))
+            {
+                slot = slot with { DeviceName = busDevSnap[i], DeviceMissing = false };
+                outputsChanged = true;
+            }
+            newOutputs.Add(slot);
+        }
+
+        if (inputsChanged) state = state with { Inputs = newInputs };
+        if (outputsChanged) state = state with { Outputs = newOutputs };
+        return state;
+    }
+
+    // Restore one locked Strip/Bus device, but never retry a slot we already failed to
+    // restore to the same target — retrying blanks/cycles the device every poll.
+    private static bool TryRestoreLockedDevice(bool isInput, int hwIndex, string target)
+    {
+        string key = (isInput ? "S" : "B") + hwIndex;
+        lock (_deviceRestoreGaveUp)
+        {
+            if (_deviceRestoreGaveUp.TryGetValue(key, out var failed) && failed == target)
+                return false; // gave up on this exact target; wait for a change / re-lock
+            if (_recentRestore.TryGetValue(key, out var recent) && recent.Target == target
+                && DateTime.UtcNow - recent.When < RecentRestoreWindow)
+                return true; // just restored; swap still propagating — don't re-issue
+        }
+
+        bool ok = false;
+        try { ok = VoicemeeterService.RestoreIoDevice(isInput, hwIndex, target); } catch { }
+
+        lock (_deviceRestoreGaveUp)
+        {
+            if (ok)
+            {
+                _deviceRestoreGaveUp.Remove(key);
+                _recentRestore[key] = (target, DateTime.UtcNow);
+                return true;
+            }
+            bool firstTime = !(_deviceRestoreGaveUp.TryGetValue(key, out var prev) && prev == target);
+            _deviceRestoreGaveUp[key] = target;
+            if (firstTime)
+                VoicemeeterService.LogExternal(
+                    $"device lock: giving up {(isInput ? "Strip" : "Bus")}[{hwIndex}] -> '{target}' "
+                    + "(not retried until it changes or you re-lock)");
+            return false;
+        }
+    }
+
+    // Forget all give-up state — call when the lock toggles or the snapshot is recaptured.
+    private static void ResetDeviceRestoreState()
+    {
+        lock (_deviceRestoreGaveUp) { _deviceRestoreGaveUp.Clear(); _recentRestore.Clear(); }
+    }
+
+    // Voicemeeter MME names get truncated (~31 chars); prefix-match both ways so we
+    // don't keep re-restoring a slot that's actually already on the right device.
+    private static bool DeviceNameMatches(string? current, string snapshot)
+    {
+        if (string.IsNullOrEmpty(current)) return false;
+        if (current.Equals(snapshot, StringComparison.OrdinalIgnoreCase)) return true;
+        // Prefix match for MME's truncated names, but a " [A]"/" [B]" disambiguator suffix
+        // marks a DIFFERENT device ("Headset" vs "Headset [A]") — don't conflate them, or
+        // drift detection and lock restore target the wrong device.
+        return IsTruncationPrefix(current, snapshot) || IsTruncationPrefix(snapshot, current);
+    }
+
+    private static bool IsTruncationPrefix(string longer, string shorter)
+    {
+        if (!longer.StartsWith(shorter, StringComparison.OrdinalIgnoreCase)) return false;
+        var extra = longer.Substring(shorter.Length).TrimStart();
+        return !extra.StartsWith("[", StringComparison.Ordinal);
+    }
+
+    // Optimistic device name: while a just-picked device hasn't propagated to the
+    // Voicemeeter readback yet, show the pick. Clears once the readback catches up.
+    private (string? Name, bool Overridden) EffectiveDevice(bool isInput, VoicemeeterIoSlot slot)
+    {
+        var k = (isInput, slot.Index);
+        if (_pendingDeviceWrites.TryGetValue(k, out var pending))
+        {
+            if (DeviceNameMatches(slot.DeviceName, pending.Name)
+                || DateTime.UtcNow - pending.When >= PendingDeviceWindow)
+                _pendingDeviceWrites.Remove(k);
+            else
+                return (pending.Name, true);
+        }
+        return (slot.DeviceName, false);
+    }
+
+    private static string VmSignature(VoicemeeterIoState? s)
+    {
+        if (s == null) return "null";
+        var sb = new System.Text.StringBuilder(s.TypeName);
+        foreach (var o in s.Outputs) sb.Append('|').Append(o.DeviceName);
+        foreach (var i in s.Inputs) sb.Append('|').Append(i.DeviceName).Append(i.Muted ? '1' : '0');
+        return sb.ToString();
     }
 
     private void RenderVoicemeeterStatus(VoicemeeterIoState? state)
@@ -522,7 +711,9 @@ public partial class MainWindow : Window
         UpdateVoicemeeterLockButton();
 
         _vmOutCount = state.Outputs.Count;
-        _vmInCount = state.Inputs.Count;
+        // Peak meters cover only the hardware strips (virtual inputs show no level bar and
+        // their 8-ch level layout would break the simple 2-ch-per-strip read).
+        _vmInCount = state.Inputs.Count(s => !s.IsVirtual);
         _vmOutputTracks = new FrameworkElement[_vmOutCount];
         _vmOutputFills = new FrameworkElement[_vmOutCount];
         _vmInputTracks = new FrameworkElement[_vmInCount];
@@ -533,9 +724,10 @@ public partial class MainWindow : Window
         for (int i = 0; i < state.Outputs.Count; i++)
         {
             var slot = state.Outputs[i];
-            var (row, track, fill) = BuildVoicemeeterRow($"▶ {FormatSlotLabel(slot)}", slot.DeviceName, false, null, slot.DeviceMissing);
+            var (odn, oov) = EffectiveDevice(false, slot);
+            var (row, track, fill) = BuildVoicemeeterRow($"▶ {FormatSlotLabel(slot)}", VoicemeeterService.DisplayNameFor(odn, false), false, false, slot.Index, slot.DeviceMissing && !oov);
             VoicemeeterIoList.Items.Add(row);
-            _vmOutputTracks[i] = track; _vmOutputFills[i] = fill;
+            if (track != null && fill != null) { _vmOutputTracks[i] = track; _vmOutputFills[i] = fill; }
         }
         for (int i = 0; i < state.Inputs.Count; i++)
         {
@@ -548,17 +740,24 @@ public partial class MainWindow : Window
                 else
                     _pendingMuteWrites.Remove(slot.Index);
             }
-            var (row, track, fill) = BuildVoicemeeterRow($"● {FormatSlotLabel(slot)}", slot.DeviceName, effectiveMuted, slot.Index, slot.DeviceMissing);
+            var (idn, iov) = EffectiveDevice(true, slot);
+            var (row, track, fill) = BuildVoicemeeterRow($"● {FormatSlotLabel(slot)}", VoicemeeterService.DisplayNameFor(idn, true), effectiveMuted, true, slot.Index, slot.DeviceMissing && !iov, slot.IsVirtual);
             VoicemeeterIoList.Items.Add(row);
-            _vmInputTracks[i] = track; _vmInputFills[i] = fill;
+            // Virtual strips have no level bar; only hardware strips (which come first) map
+            // to the peak-meter arrays.
+            if (!slot.IsVirtual && i < _vmInputTracks.Length && track != null && fill != null)
+            {
+                _vmInputTracks[i] = track;
+                _vmInputFills[i] = fill;
+            }
         }
     }
 
     private static string FormatSlotLabel(VoicemeeterIoSlot slot) =>
         string.IsNullOrEmpty(slot.CustomLabel) ? slot.Label : slot.CustomLabel;
 
-    private (UIElement Row, FrameworkElement Track, FrameworkElement Fill) BuildVoicemeeterRow(
-        string label, string? deviceName, bool muted, int? stripIndex, bool deviceMissing)
+    private (UIElement Row, FrameworkElement? Track, FrameworkElement? Fill) BuildVoicemeeterRow(
+        string label, string? deviceName, bool muted, bool isInput, int hwIndex, bool deviceMissing, bool isVirtual = false)
     {
         var stack = new StackPanel { Margin = new Thickness(0, 1, 0, 2) };
 
@@ -588,9 +787,19 @@ public partial class MainWindow : Window
                     : Color.FromRgb(0x37, 0x41, 0x51)),
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
+            Cursor = isVirtual ? Cursors.Arrow : Cursors.Hand,
+            ToolTip = isVirtual
+                ? "Voicemeeter 虚拟输入（无硬件设备可选）"
+                : "点击选择设备（Voicemeeter 中的设备列表）",
         };
+        // Virtual inputs have no hardware device to pick — leave the name static.
+        if (!isVirtual)
+        {
+            devText.Tag = (isInput, hwIndex);
+            devText.MouseLeftButtonUp += DeviceName_Click;
+        }
 
-        if (stripIndex.HasValue)
+        if (isInput)
         {
             var muteBadge = new Border
             {
@@ -602,7 +811,7 @@ public partial class MainWindow : Window
                 Cursor = Cursors.Hand,
                 Child = new TextBlock { Text = "静音", FontSize = 10 },
             };
-            muteBadge.Tag = (stripIndex.Value, muted, devText);
+            muteBadge.Tag = (hwIndex, muted, devText);
             ApplyMuteVisual(muteBadge, devText, muted);
             muteBadge.MouseLeftButtonUp += MuteBadge_Click;
             DockPanel.SetDock(muteBadge, Dock.Left);
@@ -635,6 +844,10 @@ public partial class MainWindow : Window
 
         dock.Children.Add(devText);
         stack.Children.Add(dock);
+
+        // No level bar for virtual inputs (per design — their 8-ch level layout differs).
+        if (isVirtual)
+            return (stack, null, null);
 
         var fill = new Border
         {
@@ -680,6 +893,147 @@ public partial class MainWindow : Window
         }
     }
 
+    // Driver display order in the menu — same priority as restore (WDM, KS, MME, ASIO).
+    private static int DriverOrder(int type) => type switch { 3 => 0, 4 => 1, 1 => 2, 5 => 3, _ => 9 };
+
+    private void DeviceName_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not TextBlock tb || tb.Tag is not ValueTuple<bool, int> tag) return;
+        var (isInput, hwIndex) = tag;
+
+        string? currentName = null;
+        var st = _lastVoicemeeterState;
+        if (st != null)
+            foreach (var s in (isInput ? st.Inputs : st.Outputs))
+                if (s.Index == hwIndex) { currentName = s.DeviceName; break; }
+
+        // Enumeration is a Voicemeeter IPC round-trip — off the UI thread, then show menu.
+        Task.Run(() =>
+        {
+            List<VoicemeeterDevice> devs;
+            try { devs = VoicemeeterService.GetSelectableDevices(isInput); } catch { devs = []; }
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (devs.Count == 0)
+                {
+                    ((App)Application.Current).ShowBalloon("Voicemeeter", "未获取到可选设备", true);
+                    return;
+                }
+                var ordered = devs
+                    .OrderBy(x => DriverOrder(x.Type))
+                    .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                // Decide the single item to check. Voicemeeter only tells us the device
+                // NAME, not the driver, and the same device appears under several
+                // drivers — so prefer the driver the user last picked here (if it's
+                // still the active device), else the highest-priority name match.
+                string key = (isInput ? "S" : "B") + hwIndex;
+
+                // First menu open after a restart: seed the remembered pick from settings.
+                if (!_lastPickedVmDevice.ContainsKey(key)
+                    && SettingsService.Load().VoicemeeterDevicePicks.TryGetValue(key, out var saved))
+                {
+                    int bar = saved.IndexOf('|');
+                    if (bar > 0 && int.TryParse(saved.Substring(0, bar), out var savedType))
+                        _lastPickedVmDevice[key] = (savedType, saved.Substring(bar + 1));
+                }
+
+                VoicemeeterDevice? checkedDev = null;
+                if (currentName != null)
+                {
+                    // 1. The exact driver+device the user last picked here (disambiguates
+                    //    which driver shows the same device), if it's still the current one.
+                    if (_lastPickedVmDevice.TryGetValue(key, out var picked)
+                        && DeviceNameMatches(currentName, picked.Name))
+                        foreach (var d in ordered)
+                            if (d.Type == picked.Type
+                                && string.Equals(d.Name, picked.Name, StringComparison.OrdinalIgnoreCase))
+                            { checkedDev = d; break; }
+
+                    // 2. Exact name match — so "Headphones [B]" (BX17) isn't stolen by the
+                    //    generic "Headphones" (a different device) through loose prefix matching.
+                    if (checkedDev == null)
+                        foreach (var d in ordered)
+                            if (string.Equals(d.Name, currentName, StringComparison.OrdinalIgnoreCase))
+                            { checkedDev = d; break; }
+
+                    // 3. Prefix match as a last resort — covers MME's ~31-char truncated names.
+                    if (checkedDev == null)
+                        foreach (var d in ordered) // priority order, first match wins
+                            if (DeviceNameMatches(currentName, d.Name)) { checkedDev = d; break; }
+                }
+
+                var menu = new ContextMenu
+                {
+                    PlacementTarget = tb,
+                    Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+                };
+                int? lastType = null;
+                foreach (var d in ordered)
+                {
+                    if (lastType != null && lastType != d.Type) menu.Items.Add(new Separator());
+                    lastType = d.Type;
+                    var captured = d;
+                    var mi = new MenuItem
+                    {
+                        Header = $"{d.DriverLabel}: {d.DisplayName}",
+                        IsChecked = checkedDev != null
+                            && d.Type == checkedDev.Type && d.Name == checkedDev.Name,
+                    };
+                    mi.Click += (_, _) => ApplyDeviceSelection(isInput, hwIndex, captured);
+                    menu.Items.Add(mi);
+                }
+                menu.IsOpen = true;
+            });
+        });
+    }
+
+    private void ApplyDeviceSelection(bool isInput, int hwIndex, VoicemeeterDevice dev)
+    {
+        Task.Run(() =>
+        {
+            bool ok = false;
+            try { ok = VoicemeeterService.SetIoDevice(isInput, hwIndex, dev.Type, dev.Name); } catch { }
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (ok)
+                {
+                    string key = (isInput ? "S" : "B") + hwIndex;
+                    // Show the picked device right away — the Voicemeeter readback
+                    // lags the swap by up to ~2s, otherwise the name appears stuck.
+                    _pendingDeviceWrites[(isInput, hwIndex)] = (dev.Name, DateTime.UtcNow);
+                    // Remember which driver was picked so the menu checks exactly this
+                    // one — in memory for this session and in settings for next launch.
+                    _lastPickedVmDevice[key] = (dev.Type, dev.Name);
+                    var settings = SettingsService.Load();
+                    settings.VoicemeeterDevicePicks[key] = $"{dev.Type}|{dev.Name}";
+
+                    // While locked, the manual pick must become the new locked target,
+                    // otherwise EnforceVoicemeeterLock would immediately revert it.
+                    if (settings.VoicemeeterMuteLocked)
+                    {
+                        var snap = isInput
+                            ? settings.VoicemeeterStripDeviceSnapshot
+                            : settings.VoicemeeterBusDeviceSnapshot;
+                        if (hwIndex >= 0 && hwIndex < snap.Count)
+                        {
+                            snap[hwIndex] = dev.Name;
+                            ResetDeviceRestoreState();
+                        }
+                    }
+                    SettingsService.Save();
+                }
+                else
+                {
+                    ((App)Application.Current).ShowBalloon(
+                        "Voicemeeter", $"切换设备失败：{dev.DriverLabel}: {dev.DisplayName}", true);
+                }
+                RefreshVoicemeeterStatus();
+            });
+        });
+    }
+
     private void UpdateVoicemeeterLockButton()
     {
         bool locked = SettingsService.Load().VoicemeeterMuteLocked;
@@ -688,8 +1042,8 @@ public partial class MainWindow : Window
             ? new SolidColorBrush(Color.FromRgb(0xD9, 0x77, 0x06))
             : new SolidColorBrush(Color.FromRgb(0x9C, 0xA3, 0xAF));
         VoicemeeterLockBtn.ToolTip = locked
-            ? "Strip 静音已锁定 — 点击解锁"
-            : "锁定当前 Strip 静音状态（外部修改会自动恢复）";
+            ? "Strip 静音和设备路由已锁定 — 点击解锁"
+            : "锁定当前 Strip 静音和设备路由（外部修改会自动恢复）";
     }
 
     private void VoicemeeterLock_Click(object sender, RoutedEventArgs e)
@@ -699,6 +1053,8 @@ public partial class MainWindow : Window
         {
             settings.VoicemeeterMuteLocked = false;
             settings.VoicemeeterStripMuteSnapshot = [];
+            settings.VoicemeeterStripDeviceSnapshot = [];
+            settings.VoicemeeterBusDeviceSnapshot = [];
         }
         else
         {
@@ -711,8 +1067,11 @@ public partial class MainWindow : Window
             if (state == null) return;
             settings.VoicemeeterMuteLocked = true;
             settings.VoicemeeterStripMuteSnapshot = state.Inputs.Select(s => s.Muted).ToList();
+            settings.VoicemeeterStripDeviceSnapshot = state.Inputs.Select(s => s.DeviceName ?? "").ToList();
+            settings.VoicemeeterBusDeviceSnapshot = state.Outputs.Select(s => s.DeviceName ?? "").ToList();
         }
         SettingsService.Save();
+        ResetDeviceRestoreState();
         UpdateVoicemeeterLockButton();
     }
 

@@ -27,6 +27,14 @@ public class AppSettings
     public Guid? LockedProfileId { get; set; }
     public bool VoicemeeterMuteLocked { get; set; }
     public List<bool> VoicemeeterStripMuteSnapshot { get; set; } = [];
+    // Device-routing snapshots taken at lock time, by slot index. Empty string = the
+    // slot had no device assigned (not enforced — we never force-clear a routing).
+    public List<string> VoicemeeterStripDeviceSnapshot { get; set; } = [];
+    public List<string> VoicemeeterBusDeviceSnapshot { get; set; } = [];
+    // Last device the user picked per slot, so the select menu can check the right
+    // driver after a restart (Voicemeeter's API can't report the active driver type).
+    // Key "S<idx>"/"B<idx>", value "<driverType>|<deviceName>".
+    public Dictionary<string, string> VoicemeeterDevicePicks { get; set; } = [];
     public bool VoicemeeterIntegrationEnabled { get; set; } = false;
 }
 
