@@ -9,7 +9,8 @@
 | `tray.png` | 系统托盘右键菜单 |
 | `profile-edit.png` | 配置编辑对话框（名称 + 快捷键 + 应用覆盖） |
 | `app-profiles.png` | 应用配置窗口（独立的应用音频预设管理） |
-| `app-audio.png` | 应用音频窗口（视图 → 应用音频） |
+| `app-audio.png` | 应用音频窗口（视图 → 应用音频，含每个应用的音量/静音） |
+| `voicemeeter.png` | Voicemeeter 集成面板（Strip / Bus 电平 + 静音 + 设备路由） |
 | `settings.png` | 设置对话框 |
 
 建议 PNG 尺寸不超过 1200px 宽，避免仓库体积过大。
