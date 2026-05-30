@@ -82,6 +82,18 @@ public static class AudioDeviceService
         return found;
     }
 
+    // Returns an MMDevice for the given id (caller owns it and must Dispose). The device
+    // outlives the enumerator, matching how GetDefaultAudioEndpoint is used elsewhere.
+    public static MMDevice? GetDeviceById(string deviceId)
+    {
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            return enumerator.GetDevice(deviceId);
+        }
+        catch { return null; }
+    }
+
     public static void SetDefaultDevice(string deviceId)
     {
         var policy = new PolicyConfigClient();

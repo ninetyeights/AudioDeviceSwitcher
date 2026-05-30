@@ -52,6 +52,18 @@ public partial class MainWindow : Window
     private FrameworkElement? _peakRecordingFill;
     private double _peakPlaybackDisplayed;
     private double _peakRecordingDisplayed;
+    // Per-playback-device volume: one MMDevice per row (for read/write), keyed by device id.
+    // Disposed and rebuilt on every LoadDevices(). External volume/mute changes arrive via
+    // each device's AudioEndpointVolume.OnVolumeNotification event (no polling).
+    private readonly Dictionary<string, MMDevice> _playbackVolumeDevices = new(StringComparer.OrdinalIgnoreCase);
+    private bool _suppressVolumeWrite;
+
+    // Carried on each volume Slider's Tag so its handler knows which device + label to update.
+    private sealed class VolRef
+    {
+        public required string Id;
+        public required TextBlock Label;
+    }
     private FrameworkElement[]? _vmOutputTracks;
     private FrameworkElement[]? _vmOutputFills;
     private FrameworkElement[]? _vmInputTracks;
@@ -231,6 +243,154 @@ public partial class MainWindow : Window
         UpdatePeak(_peakPlaybackDevice, _peakPlaybackTrack, _peakPlaybackFill, ref _peakPlaybackDisplayed);
         UpdatePeak(_peakRecordingDevice, _peakRecordingTrack, _peakRecordingFill, ref _peakRecordingDisplayed);
         UpdateVoicemeeterPeaks();
+    }
+
+    // Fired by Windows (on a system thread) when a device's volume/mute changes from any source.
+    // Marshals to the UI thread and updates that row's controls. Skips the slider while the user
+    // is dragging it; _suppressVolumeWrite stops the write-back from echoing into the device.
+    private void OnDeviceVolumeChanged(Slider slider, TextBlock pct, Button muteBtn, AudioVolumeNotificationData data)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            ApplyMuteGlyph(muteBtn, data.Muted);
+            if (!slider.IsMouseCaptureWithin && Math.Abs(slider.Value - data.MasterVolume) > 0.005)
+            {
+                _suppressVolumeWrite = true;
+                slider.Value = data.MasterVolume;
+                _suppressVolumeWrite = false;
+            }
+            pct.Text = $"{(int)Math.Round(data.MasterVolume * 100)}%";
+        });
+    }
+
+    private void DisposePlaybackVolumeDevices()
+    {
+        foreach (var d in _playbackVolumeDevices.Values)
+            try { d.Dispose(); } catch { }
+        _playbackVolumeDevices.Clear();
+    }
+
+    // Mute button + volume slider + percent label for one playback device row.
+    // Holds the device's MMDevice in _playbackVolumeDevices and subscribes to its
+    // OnVolumeNotification so external volume/mute changes update the row live.
+    private Grid BuildVolumeRow(string deviceId)
+    {
+        var muteGlyph = new TextBlock
+        {
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var muteBtn = new Button
+        {
+            Content = muteGlyph,
+            Tag = deviceId,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(2, 0, 2, 0),
+            Cursor = Cursors.Hand,
+            Focusable = false,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        muteBtn.Click += MuteButton_Click;
+
+        var pct = new TextBlock
+        {
+            Width = 34,
+            TextAlignment = TextAlignment.Right,
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80)),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var slider = new Slider
+        {
+            Minimum = 0,
+            Maximum = 1,
+            SmallChange = 0.02,
+            LargeChange = 0.1,
+            Focusable = false,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 6, 0),
+            Tag = new VolRef { Id = deviceId, Label = pct },
+        };
+        slider.ValueChanged += VolumeSlider_ValueChanged;
+
+        var grid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(muteBtn, 0);
+        Grid.SetColumn(slider, 1);
+        Grid.SetColumn(pct, 2);
+        grid.Children.Add(muteBtn);
+        grid.Children.Add(slider);
+        grid.Children.Add(pct);
+
+        // Acquire the device and seed initial values.
+        float vol = 1f;
+        bool muted = false;
+        var dev = AudioDeviceService.GetDeviceById(deviceId);
+        if (dev != null)
+        {
+            _playbackVolumeDevices[deviceId] = dev;
+            try
+            {
+                var v = dev.AudioEndpointVolume;
+                vol = v.MasterVolumeLevelScalar;
+                muted = v.Mute;
+                v.OnVolumeNotification += data => OnDeviceVolumeChanged(slider, pct, muteBtn, data);
+            }
+            catch (COMException) { }
+        }
+        else
+        {
+            slider.IsEnabled = false;
+            muteBtn.IsEnabled = false;
+        }
+
+        _suppressVolumeWrite = true;
+        slider.Value = vol;
+        _suppressVolumeWrite = false;
+        pct.Text = $"{(int)Math.Round(vol * 100)}%";
+        ApplyMuteGlyph(muteBtn, muted);
+        return grid;
+    }
+
+    private static void ApplyMuteGlyph(Button btn, bool muted)
+    {
+        if (btn.Content is not TextBlock tb) return;
+        tb.Text = muted ? "" : ""; // Segoe MDL2: Mute / Volume
+        tb.Foreground = new SolidColorBrush(muted
+            ? Color.FromRgb(0xB9, 0x1C, 0x1C)
+            : Color.FromRgb(0x37, 0x41, 0x51));
+        btn.ToolTip = muted ? "已静音 — 点击取消" : "点击静音";
+    }
+
+    private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppressVolumeWrite) return;
+        if (sender is not Slider s || s.Tag is not VolRef r) return;
+        if (_playbackVolumeDevices.TryGetValue(r.Id, out var dev))
+        {
+            try { dev.AudioEndpointVolume.MasterVolumeLevelScalar = (float)e.NewValue; }
+            catch (COMException) { }
+        }
+        r.Label.Text = $"{(int)Math.Round(e.NewValue * 100)}%";
+    }
+
+    private void MuteButton_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true; // don't bubble to DeviceButton_Click (it rebuilds the whole list)
+        if (sender is not Button b || b.Tag is not string id) return;
+        if (!_playbackVolumeDevices.TryGetValue(id, out var dev)) return;
+        try
+        {
+            var v = dev.AudioEndpointVolume;
+            v.Mute = !v.Mute;
+            ApplyMuteGlyph(b, v.Mute);
+        }
+        catch (COMException) { }
     }
 
     private void UpdateVoicemeeterPeaks()
@@ -504,6 +664,7 @@ public partial class MainWindow : Window
         _peakRecordingFill = null;
         _peakPlaybackDisplayed = 0;
         _peakRecordingDisplayed = 0;
+        DisposePlaybackVolumeDevices();
 
         LoadPlaybackDevices();
         LoadRecordingDevices();
@@ -1244,32 +1405,40 @@ public partial class MainWindow : Window
         else if (isHidden) opacity = 0.5;
 
         object content = root;
-        if (device.IsDefault && !device.IsDisabled)
+        bool wantsPeak = device.IsDefault && !device.IsDisabled;       // peak bar: default device only
+        bool wantsVolume = isPlayback && !device.IsDisabled;           // volume row: every playback device
+        if (wantsPeak || wantsVolume)
         {
             var stack = new StackPanel();
             stack.Children.Add(root);
 
-            var fill = new Border
+            if (wantsPeak)
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x10, 0x9E, 0x7A)),
-                CornerRadius = new CornerRadius(2),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Width = 0,
-            };
-            var track = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(0xE5, 0xE7, 0xEB)),
-                CornerRadius = new CornerRadius(2),
-                Height = 4,
-                Margin = new Thickness(2, 6, 2, 0),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                Child = fill,
-                ClipToBounds = true,
-            };
-            stack.Children.Add(track);
+                var fill = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(0x10, 0x9E, 0x7A)),
+                    CornerRadius = new CornerRadius(2),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Width = 0,
+                };
+                var track = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(0xE5, 0xE7, 0xEB)),
+                    CornerRadius = new CornerRadius(2),
+                    Height = 4,
+                    Margin = new Thickness(2, 6, 2, 0),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Child = fill,
+                    ClipToBounds = true,
+                };
+                stack.Children.Add(track);
 
-            if (isPlayback) { _peakPlaybackTrack = track; _peakPlaybackFill = fill; }
-            else { _peakRecordingTrack = track; _peakRecordingFill = fill; }
+                if (isPlayback) { _peakPlaybackTrack = track; _peakPlaybackFill = fill; }
+                else { _peakRecordingTrack = track; _peakRecordingFill = fill; }
+            }
+
+            if (wantsVolume)
+                stack.Children.Add(BuildVolumeRow(device.Id));
 
             content = stack;
         }
@@ -1301,6 +1470,17 @@ public partial class MainWindow : Window
         };
         toggleEnableItem.Click += ToggleEnableDevice_Click;
         menu.Items.Add(toggleEnableItem);
+        if (isPlayback)
+        {
+            var testItem = new MenuItem
+            {
+                Header = "测试播放",
+                Tag = device.Id,
+                IsEnabled = !device.IsDisabled,
+            };
+            testItem.Click += TestPlayback_Click;
+            menu.Items.Add(testItem);
+        }
         menu.Items.Add(new Separator());
         var renameItem = new MenuItem { Header = "重命名…", Tag = device };
         renameItem.Click += RenameDevice_Click;
@@ -1311,6 +1491,20 @@ public partial class MainWindow : Window
         btn.ContextMenu = menu;
 
         return btn;
+    }
+
+    private void TestPlayback_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem mi || mi.Tag is not string deviceId) return;
+        try
+        {
+            TestPlaybackService.Play(deviceId);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"无法在此设备上播放测试音：{ex.Message}",
+                "测试播放", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void RenameDevice_Click(object sender, RoutedEventArgs e)

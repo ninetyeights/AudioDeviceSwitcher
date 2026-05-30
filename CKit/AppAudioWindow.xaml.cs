@@ -53,6 +53,39 @@ public partial class AppAudioWindow : Window
             }
         }
 
+        private double _volume = 1.0;
+        public double Volume
+        {
+            get => _volume;
+            set
+            {
+                if (Math.Abs(_volume - value) < 0.0001) return;
+                _volume = value;
+                OnChanged(nameof(Volume));
+                OnChanged(nameof(VolumePercent));
+                if (!_suppressApply)
+                    foreach (var pid in AllPidsForThisApp())
+                        try { AudioSessionService.SetAppVolume(pid, (float)value); } catch { }
+            }
+        }
+
+        public string VolumePercent => $"{(int)Math.Round(_volume * 100)}%";
+
+        private bool _isMuted;
+        public bool IsMuted
+        {
+            get => _isMuted;
+            set
+            {
+                if (_isMuted == value) return;
+                _isMuted = value;
+                OnChanged(nameof(IsMuted));
+                if (!_suppressApply)
+                    foreach (var pid in AllPidsForThisApp())
+                        try { AudioSessionService.SetAppMute(pid, value); } catch { }
+            }
+        }
+
         private bool _suppressApply;
 
         public string? ExecutablePath { get; }
@@ -95,11 +128,24 @@ public partial class AppAudioWindow : Window
                     string.Equals(o.Id, outId, StringComparison.OrdinalIgnoreCase)) ?? FollowSystem;
                 _selectedInput = InputOptions.FirstOrDefault(o =>
                     string.Equals(o.Id, inId, StringComparison.OrdinalIgnoreCase)) ?? FollowSystem;
+
+                foreach (var pid in AllPidsForThisApp())
+                {
+                    var vm = AudioSessionService.GetAppVolume(pid);
+                    if (vm == null) continue;
+                    _volume = vm.Value.Volume;
+                    _isMuted = vm.Value.Muted;
+                    break;
+                }
+
                 OnChanged(nameof(SelectedOutput));
                 OnChanged(nameof(SelectedInput));
                 OnChanged(nameof(IsOutputDrifted));
                 OnChanged(nameof(IsInputDrifted));
                 OnChanged(nameof(IsDrifted));
+                OnChanged(nameof(Volume));
+                OnChanged(nameof(VolumePercent));
+                OnChanged(nameof(IsMuted));
             }
             finally { _suppressApply = false; }
         }
