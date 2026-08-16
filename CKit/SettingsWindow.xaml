@@ -13,6 +13,8 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- 通知 -->
@@ -52,8 +54,19 @@
                     Margin="0,10,0,0" Click="OpenDataDir_Click"/>
         </StackPanel>
 
+        <Separator Grid.Row="7" Margin="0,12,0,12"/>
+
+        <!-- 更新 -->
+        <StackPanel Grid.Row="8">
+            <TextBlock Text="更新" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <CheckBox x:Name="ChkAutoCheckUpdates" Content="自动检查更新" Margin="0,2"/>
+            <TextBlock x:Name="UpdateStatusText" FontSize="11" Foreground="#777" Margin="20,4,0,0"/>
+            <Button x:Name="CheckUpdateButton" Content="检查更新" Padding="10,4" HorizontalAlignment="Left"
+                    Margin="0,8,0,0" Click="CheckUpdate_Click"/>
+        </StackPanel>
+
         <!-- 按钮 -->
-        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+        <StackPanel Grid.Row="9" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="取消" Padding="16,6" Margin="0,0,8,0" Click="Cancel_Click" IsCancel="True"/>
             <Button Content="保存" Padding="16,6" Click="Save_Click" IsDefault="True"/>
         </StackPanel>

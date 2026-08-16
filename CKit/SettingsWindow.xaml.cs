@@ -17,6 +17,33 @@ public partial class SettingsWindow : Window
         ChkBlink.IsChecked = s.EnableBlinkAnimation;
         ChkStartMinimized.IsChecked = s.StartMinimized;
         ChkVoicemeeterEnabled.IsChecked = s.VoicemeeterIntegrationEnabled;
+        ChkAutoCheckUpdates.IsChecked = s.AutoCheckUpdates;
+        RefreshUpdateStatusText();
+    }
+
+    private void RefreshUpdateStatusText()
+    {
+        var s = SettingsService.Load();
+        var current = $"当前版本 v{UpdateService.GetCurrentVersion().ToString(3)}";
+        var lastChecked = s.LastUpdateCheckUtc is { } t
+            ? $"，上次检查：{t.ToLocalTime():yyyy-MM-dd HH:mm}"
+            : "，尚未检查过";
+        UpdateStatusText.Text = current + lastChecked;
+    }
+
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        CheckUpdateButton.IsEnabled = false;
+        UpdateStatusText.Text = "正在检查更新…";
+        try
+        {
+            await UpdateService.CheckAndPromptAsync(this, manual: true);
+        }
+        finally
+        {
+            RefreshUpdateStatusText();
+            CheckUpdateButton.IsEnabled = true;
+        }
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
@@ -30,6 +57,7 @@ public partial class SettingsWindow : Window
         s.EnableBlinkAnimation = ChkBlink.IsChecked == true;
         s.StartMinimized = ChkStartMinimized.IsChecked == true;
         s.VoicemeeterIntegrationEnabled = ChkVoicemeeterEnabled.IsChecked == true;
+        s.AutoCheckUpdates = ChkAutoCheckUpdates.IsChecked == true;
         SettingsService.Save();
         if (prevVm != s.VoicemeeterIntegrationEnabled)
         {

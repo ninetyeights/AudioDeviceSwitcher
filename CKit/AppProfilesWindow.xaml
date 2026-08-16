@@ -39,7 +39,8 @@
                                     <TextBlock FontSize="11" Foreground="#666">
                                         <Run Text="输出: "/>
                                         <Run Text="{Binding OutputDeviceName, FallbackValue=跟随系统, TargetNullValue=跟随系统}"/>
-                                        <Run Text="   "/>
+                                    </TextBlock>
+                                    <TextBlock FontSize="11" Foreground="#666">
                                         <Run Text="输入: "/>
                                         <Run Text="{Binding InputDeviceName, FallbackValue=跟随系统, TargetNullValue=跟随系统}"/>
                                     </TextBlock>

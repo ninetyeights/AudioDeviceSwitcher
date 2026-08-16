@@ -2174,6 +2174,9 @@ public partial class MainWindow : Window
         dlg.ShowDialog();
     }
 
+    private async void CheckForUpdates_Click(object sender, RoutedEventArgs e) =>
+        await UpdateService.CheckAndPromptAsync(this, manual: true);
+
     private void OpenAppAudio_Click(object sender, RoutedEventArgs e)
     {
         var win = new AppAudioWindow { Owner = this };

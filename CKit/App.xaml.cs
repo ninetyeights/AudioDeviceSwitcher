@@ -81,6 +81,7 @@ public partial class App : Application
         menu.Items.Add("打开主窗口", null, (_, _) => ShowMainWindow());
         menu.Items.Add("迷你窗口", null, (_, _) => ShowMiniFromTray());
         menu.Items.Add("设置…", null, (_, _) => ShowSettingsWindow());
+        menu.Items.Add("检查更新…", null, async (_, _) => await UpdateService.CheckAndPromptAsync(GetVisibleMainWindow(), manual: true));
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
 
         var autoStartItem = new System.Windows.Forms.ToolStripMenuItem("开机自启")
@@ -137,6 +138,26 @@ public partial class App : Application
             if (_mainWindow == null) ShowMainWindow();
             _mainWindow?.OpenMiniWindow();
         }
+
+        _ = MaybeAutoCheckForUpdatesAsync();
+    }
+
+    private Window? GetVisibleMainWindow() =>
+        _mainWindow is { IsLoaded: true, IsVisible: true } ? _mainWindow : null;
+
+    // Runs at most once per 24h (persisted via LastUpdateCheckUtc) so relaunching the app
+    // repeatedly doesn't hammer the GitHub API. Silent unless a genuinely new, non-skipped
+    // version is found — see UpdateService.CheckAndPromptAsync.
+    private async Task MaybeAutoCheckForUpdatesAsync()
+    {
+        var settings = SettingsService.Load();
+        if (!settings.AutoCheckUpdates) return;
+        if (settings.LastUpdateCheckUtc is { } last && DateTime.UtcNow - last < TimeSpan.FromHours(24)) return;
+
+        // Let the UI finish showing before doing network I/O.
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        await UpdateService.CheckAndPromptAsync(GetVisibleMainWindow(), manual: false);
     }
 
     private void ShowSettingsWindow()

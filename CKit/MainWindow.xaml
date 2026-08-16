@@ -127,6 +127,7 @@
                 <MenuItem Header="&#x8BBE;&#x7F6E;&#x2026;" Click="OpenSettings_Click"/>
             </MenuItem>
             <MenuItem Header="&#x5E2E;&#x52A9;">
+                <MenuItem Header="&#x68C0;&#x67E5;&#x66F4;&#x65B0;&#x2026;" Click="CheckForUpdates_Click"/>
                 <MenuItem Header="&#x5173;&#x4E8E;&#x2026;" Click="OpenAbout_Click"/>
             </MenuItem>
         </Menu>

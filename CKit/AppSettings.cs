@@ -36,6 +36,13 @@ public class AppSettings
     // Key "S<idx>"/"B<idx>", value "<driverType>|<deviceName>".
     public Dictionary<string, string> VoicemeeterDevicePicks { get; set; } = [];
     public bool VoicemeeterIntegrationEnabled { get; set; } = false;
+
+    public bool AutoCheckUpdates { get; set; } = true;
+    // Normalized "Major.Minor.Build" (e.g. "1.6.0") of a release the user explicitly
+    // dismissed — suppresses only the silent auto-check prompt for that exact version;
+    // a manual check always re-evaluates regardless of this.
+    public string? SkippedUpdateVersion { get; set; }
+    public DateTime? LastUpdateCheckUtc { get; set; }
 }
 
 public static class SettingsService
