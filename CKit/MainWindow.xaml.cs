@@ -1313,6 +1313,24 @@ public partial class MainWindow : Window
         }
     }
 
+    // Segoe MDL2 Assets glyphs for the device context menu, matching the main-menu icon
+    // treatment (MenuIcon style in this window's resources). Codepoints were confirmed by
+    // rendering them first — several plausible-by-name codepoints (e.g. what looked like a
+    // power-button glyph) turned out to draw as an unrelated shape in this font.
+    private const char IconFavStar = '';
+    private const char IconCheckCircle = '';
+    private const char IconBlockCircle = '';
+    private const char IconPlay = '';
+    private const char IconEdit = '';
+    private const char IconViewOpen = '';
+    private const char IconViewOff = '';
+
+    private TextBlock MenuGlyph(char glyph) => new()
+    {
+        Style = (Style)FindResource("MenuIcon"),
+        Text = glyph.ToString(),
+    };
+
     private Button CreateDeviceButton(AudioDeviceInfo device, bool isHidden = false, bool isSelected = false, bool isPlayback = true)
     {
         // Blue highlight = user selection only. Default device uses plain style + checkmark.
@@ -1456,7 +1474,7 @@ public partial class MainWindow : Window
         bool anyLocked = ((App)Application.Current).IsAnyProfileLocked();
 
         var menu = new ContextMenu();
-        var setDefaultItem = new MenuItem { Header = "设为默认设备", Tag = device.Id };
+        var setDefaultItem = new MenuItem { Header = "设为默认设备", Tag = device.Id, Icon = MenuGlyph(IconFavStar) };
         setDefaultItem.Click += SetDefaultDevice_Click;
         setDefaultItem.IsEnabled = !device.IsDefault && !device.IsDisabled && !anyLocked;
         if (anyLocked) setDefaultItem.ToolTip = "已锁定 — 请先解锁配置";
@@ -1467,6 +1485,7 @@ public partial class MainWindow : Window
             Tag = device.Id,
             IsEnabled = !anyLocked,
             ToolTip = anyLocked ? "已锁定 — 请先解锁配置" : null,
+            Icon = MenuGlyph(device.IsDisabled ? IconCheckCircle : IconBlockCircle),
         };
         toggleEnableItem.Click += ToggleEnableDevice_Click;
         menu.Items.Add(toggleEnableItem);
@@ -1477,15 +1496,21 @@ public partial class MainWindow : Window
                 Header = "测试播放",
                 Tag = device.Id,
                 IsEnabled = !device.IsDisabled,
+                Icon = MenuGlyph(IconPlay),
             };
             testItem.Click += TestPlayback_Click;
             menu.Items.Add(testItem);
         }
         menu.Items.Add(new Separator());
-        var renameItem = new MenuItem { Header = "重命名…", Tag = device };
+        var renameItem = new MenuItem { Header = "重命名…", Tag = device, Icon = MenuGlyph(IconEdit) };
         renameItem.Click += RenameDevice_Click;
         menu.Items.Add(renameItem);
-        var toggleItem = new MenuItem { Header = isHidden ? "显示此设备" : "隐藏此设备", Tag = device.Id };
+        var toggleItem = new MenuItem
+        {
+            Header = isHidden ? "显示此设备" : "隐藏此设备",
+            Tag = device.Id,
+            Icon = MenuGlyph(isHidden ? IconViewOpen : IconViewOff),
+        };
         toggleItem.Click += ToggleHideDevice_Click;
         menu.Items.Add(toggleItem);
         btn.ContextMenu = menu;

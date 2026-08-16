@@ -78,13 +78,13 @@ public partial class App : Application
         catch { }
 
         var menu = new System.Windows.Forms.ContextMenuStrip();
-        menu.Items.Add("打开主窗口", null, (_, _) => ShowMainWindow());
-        menu.Items.Add("迷你窗口", null, (_, _) => ShowMiniFromTray());
-        menu.Items.Add("设置…", null, (_, _) => ShowSettingsWindow());
-        menu.Items.Add("检查更新…", null, async (_, _) => await UpdateService.CheckAndPromptAsync(GetVisibleMainWindow(), manual: true));
+        menu.Items.Add("打开主窗口", CreateMenuIcon(''), (_, _) => ShowMainWindow());
+        menu.Items.Add("迷你窗口", CreateMenuIcon(''), (_, _) => ShowMiniFromTray());
+        menu.Items.Add("设置…", CreateMenuIcon(''), (_, _) => ShowSettingsWindow());
+        menu.Items.Add("检查更新…", CreateMenuIcon(''), async (_, _) => await UpdateService.CheckAndPromptAsync(GetVisibleMainWindow(), manual: true));
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
 
-        var autoStartItem = new System.Windows.Forms.ToolStripMenuItem("开机自启")
+        var autoStartItem = new System.Windows.Forms.ToolStripMenuItem("开机自启", CreateMenuIcon(''))
         {
             CheckOnClick = true,
             Checked = AutoStartService.IsEnabled(),
@@ -106,7 +106,7 @@ public partial class App : Application
         menu.Opening += (_, _) => autoStartItem.Checked = AutoStartService.IsEnabled();
 
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => ExitApp());
+        menu.Items.Add("退出", CreateMenuIcon(''), (_, _) => ExitApp());
         _trayIcon.ContextMenuStrip = menu;
 
         _trayIcon.DoubleClick += (_, _) => ShowMainWindow();
@@ -144,6 +144,23 @@ public partial class App : Application
 
     private Window? GetVisibleMainWindow() =>
         _mainWindow is { IsLoaded: true, IsVisible: true } ? _mainWindow : null;
+
+    // WinForms' ToolStripMenuItem.Image needs an actual bitmap — unlike the WPF main-window
+    // menu (MainWindow.xaml), which can render a Segoe MDL2 Assets glyph directly as a
+    // TextBlock. Rasterizing the same glyph set here keeps the tray menu's icons consistent
+    // with the main menu's.
+    private static Bitmap CreateMenuIcon(char glyph)
+    {
+        var bmp = new Bitmap(16, 16);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        using var font = new Font("Segoe MDL2 Assets", 11f);
+        using var brush = new SolidBrush(Color.FromArgb(90, 90, 90));
+        var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString(glyph.ToString(), font, brush, new RectangleF(0, 0, 16, 16), format);
+        return bmp;
+    }
 
     // Runs at most once per 24h (persisted via LastUpdateCheckUtc) so relaunching the app
     // repeatedly doesn't hammer the GitHub API. Silent unless a genuinely new, non-skipped

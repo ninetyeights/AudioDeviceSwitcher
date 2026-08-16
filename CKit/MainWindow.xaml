@@ -104,31 +104,58 @@
             <Setter Property="Foreground" Value="#374151"/>
             <Setter Property="Margin" Value="0,6,0,4"/>
         </Style>
+        <Style x:Key="MenuIcon" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Foreground" Value="#6B7280"/>
+        </Style>
     </Window.Resources>
 
     <DockPanel Background="#FFFFFF">
         <Border DockPanel.Dock="Top" Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="0,0,0,1">
         <Menu Background="Transparent" Padding="4,2">
             <MenuItem Header="&#x6587;&#x4EF6;">
-                <MenuItem Header="&#x5237;&#x65B0;" Click="Refresh_Click"/>
+                <MenuItem Header="&#x5237;&#x65B0;" Click="Refresh_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE72C;"/></MenuItem.Icon>
+                </MenuItem>
                 <Separator/>
-                <MenuItem Header="&#x5BFC;&#x51FA;&#x914D;&#x7F6E;&#x2026;" Click="ExportConfig_Click"/>
-                <MenuItem Header="&#x5BFC;&#x5165;&#x914D;&#x7F6E;&#x2026;" Click="ImportConfig_Click"/>
+                <MenuItem Header="&#x5BFC;&#x51FA;&#x914D;&#x7F6E;&#x2026;" Click="ExportConfig_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE74E;"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="&#x5BFC;&#x5165;&#x914D;&#x7F6E;&#x2026;" Click="ImportConfig_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE8B5;"/></MenuItem.Icon>
+                </MenuItem>
                 <Separator/>
-                <MenuItem Header="&#x9000;&#x51FA;" Click="ExitApp_Click"/>
+                <MenuItem Header="&#x9000;&#x51FA;" Click="ExitApp_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE711;"/></MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
             <MenuItem Header="&#x89C6;&#x56FE;">
-                <MenuItem x:Name="MiniWindowMenuItem" Header="&#x6253;&#x5F00;&#x8FF7;&#x4F60;&#x7A97;&#x53E3;" Click="ToggleMiniWindow_Click"/>
-                <MenuItem Header="&#x5E94;&#x7528;&#x914D;&#x7F6E;" Click="OpenAppProfiles_Click"/>
-                <MenuItem Header="&#x5E94;&#x7528;&#x97F3;&#x9891;" Click="OpenAppAudio_Click"/>
+                <MenuItem x:Name="MiniWindowMenuItem" Header="&#x6253;&#x5F00;&#x8FF7;&#x4F60;&#x7A97;&#x53E3;" Click="ToggleMiniWindow_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE7C4;"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="&#x5E94;&#x7528;&#x914D;&#x7F6E;" Click="OpenAppProfiles_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE71D;"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="&#x5E94;&#x7528;&#x97F3;&#x9891;" Click="OpenAppAudio_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE767;"/></MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
             <MenuItem Header="&#x5DE5;&#x5177;">
-                <MenuItem Header="&#x7CFB;&#x7EDF;&#x58F0;&#x97F3;" Click="OpenSoundSettings_Click"/>
-                <MenuItem Header="&#x8BBE;&#x7F6E;&#x2026;" Click="OpenSettings_Click"/>
+                <MenuItem Header="&#x7CFB;&#x7EDF;&#x58F0;&#x97F3;" Click="OpenSoundSettings_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE767;"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="&#x8BBE;&#x7F6E;&#x2026;" Click="OpenSettings_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE713;"/></MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
             <MenuItem Header="&#x5E2E;&#x52A9;">
-                <MenuItem Header="&#x68C0;&#x67E5;&#x66F4;&#x65B0;&#x2026;" Click="CheckForUpdates_Click"/>
-                <MenuItem Header="&#x5173;&#x4E8E;&#x2026;" Click="OpenAbout_Click"/>
+                <MenuItem Header="&#x68C0;&#x67E5;&#x66F4;&#x65B0;&#x2026;" Click="CheckForUpdates_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE896;"/></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="&#x5173;&#x4E8E;&#x2026;" Click="OpenAbout_Click">
+                    <MenuItem.Icon><TextBlock Style="{StaticResource MenuIcon}" Text="&#xE946;"/></MenuItem.Icon>
+                </MenuItem>
             </MenuItem>
         </Menu>
         </Border>
