@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
 using NAudio.CoreAudioApi;
 
 namespace AudioDeviceSwitcher;
@@ -15,6 +16,7 @@ public partial class AppAudioWindow : Window
     public class SessionRow : INotifyPropertyChanged
     {
         public uint ProcessId { get; }
+        public IReadOnlyList<string>? SessionInstanceKeys { get; }
         public string DisplayName { get; }
         public string SubText { get; }
         public ImageSource? Icon { get; }
@@ -63,13 +65,54 @@ public partial class AppAudioWindow : Window
                 _volume = value;
                 OnChanged(nameof(Volume));
                 OnChanged(nameof(VolumePercent));
-                if (!_suppressApply)
-                    foreach (var pid in AllPidsForThisApp())
-                        try { AudioSessionService.SetAppVolume(pid, (float)value); } catch { }
+                if (!_suppressApply) ApplyVolumeThrottled(value);
             }
         }
 
         public string VolumePercent => $"{(int)Math.Round(_volume * 100)}%";
+
+        // Slider drag fires Volume many times a second; SetAppVolume re-enumerates every
+        // audio device/session via COM, so applying on every tick still stutters even with
+        // the PID cache below. Throttle instead of debounce: the first change in a burst
+        // applies immediately (keeps it feeling real-time), further changes within the
+        // window are coalesced and the last one applied on a trailing timer, capping the
+        // actual COM call rate without ever going silent while dragging.
+        private const int VolumeThrottleMs = 40;
+        private long _lastVolumeApplyTicks = long.MinValue;
+        private DispatcherTimer? _volumeTrailingTimer;
+        private double _pendingVolume;
+
+        private void ApplyVolumeThrottled(double value)
+        {
+            var now = Environment.TickCount64;
+            if (now - _lastVolumeApplyTicks >= VolumeThrottleMs)
+            {
+                _volumeTrailingTimer?.Stop();
+                _lastVolumeApplyTicks = now;
+                DoApplyVolume(value);
+                return;
+            }
+
+            _pendingVolume = value;
+            if (_volumeTrailingTimer == null)
+            {
+                _volumeTrailingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(VolumeThrottleMs) };
+                _volumeTrailingTimer.Tick += (_, _) =>
+                {
+                    _volumeTrailingTimer!.Stop();
+                    _lastVolumeApplyTicks = Environment.TickCount64;
+                    DoApplyVolume(_pendingVolume);
+                };
+            }
+            _volumeTrailingTimer.Stop();
+            _volumeTrailingTimer.Start();
+        }
+
+        private void DoApplyVolume(double value)
+        {
+            foreach (var pid in AllPidsForThisApp())
+                try { AudioSessionService.SetAppVolume(pid, (float)value, pid == ProcessId ? SessionInstanceKeys : null); } catch { }
+        }
 
         private bool _isMuted;
         public bool IsMuted
@@ -82,7 +125,7 @@ public partial class AppAudioWindow : Window
                 OnChanged(nameof(IsMuted));
                 if (!_suppressApply)
                     foreach (var pid in AllPidsForThisApp())
-                        try { AudioSessionService.SetAppMute(pid, value); } catch { }
+                        try { AudioSessionService.SetAppMute(pid, value, pid == ProcessId ? SessionInstanceKeys : null); } catch { }
             }
         }
 
@@ -109,12 +152,18 @@ public partial class AppAudioWindow : Window
         public SessionRow(AppAudioSessionInfo info, List<DeviceOption> outputs, List<DeviceOption> inputs)
         {
             ProcessId = info.ProcessId;
+            SessionInstanceKeys = info.SessionInstanceKeys;
             ExecutablePath = info.ExecutablePath;
             DisplayName = info.DisplayName;
             SubText = info.ExecutablePath is { Length: > 0 } p ? p : $"PID {info.ProcessId}";
             Icon = info.Icon;
             OutputOptions = outputs;
             InputOptions = inputs;
+            // Captured straight off the session object during the same enumeration pass that
+            // found this row (see AudioSessionService.EnumerateRawSessions) — avoids a second,
+            // full device/session COM walk per row just to read the initial volume/mute state.
+            _volume = info.Volume;
+            _isMuted = info.Muted;
         }
 
         public void LoadCurrent()
@@ -128,15 +177,6 @@ public partial class AppAudioWindow : Window
                     string.Equals(o.Id, outId, StringComparison.OrdinalIgnoreCase)) ?? FollowSystem;
                 _selectedInput = InputOptions.FirstOrDefault(o =>
                     string.Equals(o.Id, inId, StringComparison.OrdinalIgnoreCase)) ?? FollowSystem;
-
-                foreach (var pid in AllPidsForThisApp())
-                {
-                    var vm = AudioSessionService.GetAppVolume(pid);
-                    if (vm == null) continue;
-                    _volume = vm.Value.Volume;
-                    _isMuted = vm.Value.Muted;
-                    break;
-                }
 
                 OnChanged(nameof(SelectedOutput));
                 OnChanged(nameof(SelectedInput));
@@ -166,12 +206,32 @@ public partial class AppAudioWindow : Window
             return null;
         }
 
-        private IEnumerable<uint> AllPidsForThisApp()
+        // Process.GetProcesses() + per-process MainModule probing (inside
+        // GetRunningPidsForExe) is a full-system scan and far too slow to redo on every
+        // slider-drag tick or mute toggle. The set of PIDs sharing this exe is effectively
+        // static for the lifetime of a row (rows are rebuilt wholesale on LoadSessions/
+        // Refresh), so compute it once and cache it.
+        private List<uint>? _pidCache;
+
+        // Lets LoadSessions seed the cache from one batched system-wide scan (covering every
+        // row's exe at once) instead of each row triggering its own Process.GetProcesses().
+        public void PrimePidCache(Dictionary<string, List<uint>> pidsByExePath)
         {
-            yield return ProcessId;
-            if (string.IsNullOrEmpty(ExecutablePath)) yield break;
-            foreach (var pid in ProfileApplyService.GetRunningPidsForExe(ExecutablePath))
-                if (pid != ProcessId) yield return pid;
+            var list = new List<uint> { ProcessId };
+            if (!string.IsNullOrEmpty(ExecutablePath) && pidsByExePath.TryGetValue(ExecutablePath, out var extra))
+                foreach (var pid in extra)
+                    if (pid != ProcessId) list.Add(pid);
+            _pidCache = list;
+        }
+
+        private List<uint> AllPidsForThisApp()
+        {
+            if (_pidCache != null) return _pidCache;
+            var list = new List<uint> { ProcessId };
+            if (!string.IsNullOrEmpty(ExecutablePath))
+                foreach (var pid in ProfileApplyService.GetRunningPidsForExe(ExecutablePath))
+                    if (pid != ProcessId) list.Add(pid);
+            return _pidCache = list;
         }
 
         private void TryApply(DataFlow flow, string? deviceId, DeviceOption previous)
@@ -207,30 +267,56 @@ public partial class AppAudioWindow : Window
     public AppAudioWindow()
     {
         InitializeComponent();
-        Loaded += (_, _) => LoadSessions();
+        Loaded += async (_, _) => await LoadSessionsAsync();
     }
 
-    private void LoadSessions()
+    // BuildRows does nothing but COM/WMI/file I/O — none of it touches a UI element or the
+    // Dispatcher (SessionRow is a plain INotifyPropertyChanged POCO with no subscribers until
+    // it's bound below), so running it on a thread-pool thread via Task.Run genuinely frees
+    // the UI thread instead of just reordering work on it. That's the difference between this
+    // and the previous Dispatcher.BeginInvoke(Background) attempt: that still blocked the UI
+    // thread for the full duration once its turn came up, so the window kept appearing to
+    // freeze/white out while it ran. Off the UI thread, the window paints and stays
+    // interactive immediately; the list just pops in a beat later.
+    private async Task LoadSessionsAsync()
+    {
+        var rows = await Task.Run(BuildRows);
+
+        // Kept on the UI thread deliberately: AppAudioRoutingService talks to an undocumented,
+        // reverse-engineered WinRT COM factory (see its file header) with no documented
+        // threading guarantee, unlike the well-worn WASAPI calls in BuildRows that this app
+        // already exercises off-thread elsewhere without issue. Not worth the risk of a
+        // cross-apartment COM failure for what's a handful of cheap per-row lookups anyway.
+        foreach (var r in rows) r.LoadCurrent();
+
+        SessionList.ItemsSource = rows;
+        EmptyHint.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static List<SessionRow> BuildRows()
     {
         var nicknames = SettingsService.Load().DeviceNicknames;
         string DisplayName(AudioDeviceInfo d) =>
             nicknames.TryGetValue(d.Id, out var nn) && !string.IsNullOrEmpty(nn)
                 ? $"{nn} — {d.Name}" : d.Name;
 
+        var playbackDevices = AudioDeviceService.GetPlaybackDevices();
+        var recordingDevices = AudioDeviceService.GetRecordingDevices();
+
         var outputs = new List<DeviceOption> { FollowSystem };
-        foreach (var d in AudioDeviceService.GetPlaybackDevices())
+        foreach (var d in playbackDevices)
             outputs.Add(new DeviceOption(d.Id, DisplayName(d)));
 
         var inputs = new List<DeviceOption> { FollowSystem };
-        foreach (var d in AudioDeviceService.GetRecordingDevices())
+        foreach (var d in recordingDevices)
             inputs.Add(new DeviceOption(d.Id, DisplayName(d)));
 
         var sessions = AudioSessionService.GetActiveAppSessions();
         var rows = sessions.Select(s => new SessionRow(s, outputs, inputs)).ToList();
 
         // Look up active system profile's AppOverrides — annotate each row with expected values.
-        var currentPlayback = AudioDeviceService.GetPlaybackDevices().Find(d => d.IsDefault);
-        var currentRecording = AudioDeviceService.GetRecordingDevices().Find(d => d.IsDefault);
+        var currentPlayback = playbackDevices.Find(d => d.IsDefault);
+        var currentRecording = recordingDevices.Find(d => d.IsDefault);
         foreach (var row in rows)
         {
             row.SystemDefaultOutputId = currentPlayback?.Id;
@@ -254,15 +340,18 @@ public partial class AppAudioWindow : Window
             }
         }
 
-        foreach (var r in rows) r.LoadCurrent();
+        var exePaths = new HashSet<string>(
+            rows.Select(r => r.ExecutablePath).Where(p => !string.IsNullOrEmpty(p))!,
+            StringComparer.OrdinalIgnoreCase);
+        var pidsByExePath = ProfileApplyService.GetRunningProcessesByPath(exePaths);
+        foreach (var r in rows) r.PrimePidCache(pidsByExePath);
 
-        SessionList.ItemsSource = rows;
-        EmptyHint.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        return rows;
     }
 
-    private void Refresh_Click(object sender, RoutedEventArgs e) => LoadSessions();
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadSessionsAsync();
 
-    private void ClearAll_Click(object sender, RoutedEventArgs e)
+    private async void ClearAll_Click(object sender, RoutedEventArgs e)
     {
         var confirm = MessageBox.Show(
             "确定要清除所有应用的设备覆盖吗？所有应用将恢复使用系统默认设备。",
@@ -272,7 +361,7 @@ public partial class AppAudioWindow : Window
         try
         {
             AppAudioRoutingService.ClearAll();
-            LoadSessions();
+            await LoadSessionsAsync();
         }
         catch (Exception ex)
         {
