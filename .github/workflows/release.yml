@@ -24,7 +24,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-          include-prerelease: true
 
       - name: Restore
         run: dotnet restore CKit/CKit.csproj
@@ -60,6 +59,31 @@ jobs:
         with:
           subject-path: ${{ steps.ver.outputs.installer }}
 
+      # softprops/action-gh-release's generate_release_notes only has commit history to work
+      # from (this repo pushes tags directly, no PRs), so it produces just a bare
+      # "Full Changelog: <compare link>" line — not useful in the app's in-product update
+      # dialog. Extract the matching "## <version> — <date>" section from CHANGELOG.md
+      # instead, so the release body is the same Chinese changelog entry a human reads.
+      - name: Extract changelog section
+        id: changelog
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          $lines = Get-Content -Encoding UTF8 CHANGELOG.md
+          $start = -1
+          $end = $lines.Count
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($start -lt 0 -and $lines[$i] -match "^## $([regex]::Escape($version))\b") { $start = $i; continue }
+            if ($start -ge 0 -and $i -gt $start -and $lines[$i] -match "^## ") { $end = $i; break }
+          }
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          if ($start -lt 0) {
+            [System.IO.File]::WriteAllText("release-notes.md", "（未在 CHANGELOG.md 中找到对应版本条目）", $utf8NoBom)
+          } else {
+            $section = ($lines[($start+1)..($end-1)] -join "`n").Trim()
+            [System.IO.File]::WriteAllText("release-notes.md", $section, $utf8NoBom)
+          }
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -67,6 +91,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             ${{ steps.ver.outputs.installer }}
