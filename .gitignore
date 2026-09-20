@@ -3,6 +3,7 @@ bin/
 obj/
 publish/
 dist/
+artifacts/
 
 # Visual Studio / Rider
 .vs/

@@ -30,7 +30,6 @@ public partial class MainWindow : Window
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_NOACTIVATE = 0x0010;
 
-    private MiniWindow? _miniWindow;
     private HotkeyService? _hotkeyService;
     private bool _forceClose;
     // Read from the Voicemeeter poll thread to decide whether to push UI updates —
@@ -289,7 +288,7 @@ public partial class MainWindow : Window
             BorderThickness = new Thickness(0),
             Padding = new Thickness(2, 0, 2, 0),
             Cursor = Cursors.Hand,
-            Focusable = false,
+            Focusable = true,
             VerticalAlignment = VerticalAlignment.Center,
         };
         muteBtn.Click += MuteButton_Click;
@@ -535,53 +534,17 @@ public partial class MainWindow : Window
             && top >= vTop - 10 && top <= vBottom - 50;
     }
 
-    public void OpenMiniWindow()
-    {
-        if (_miniWindow is { IsLoaded: true })
-        {
-            _miniWindow.Activate();
-            return;
-        }
-
-        _miniWindow = new MiniWindow(() =>
-        {
-            LoadDevices();
-            LoadProfiles();
-        });
-        _miniWindow.Closed += (_, _) =>
-        {
-            _miniWindow = null;
-            UpdateMiniMenuCheck();
-        };
-        _miniWindow.Show();
-
-        var settings = SettingsService.Load();
-        settings.MiniWindowVisible = true;
-        SettingsService.Save();
-
-        UpdateMiniMenuCheck();
-    }
-
-    private void UpdateMiniMenuCheck()
-    {
-        if (MiniWindowMenuItem == null) return;
-        bool open = _miniWindow is { IsLoaded: true };
-        MiniWindowMenuItem.IsChecked = open;
-        MiniWindowMenuItem.Header = open ? "\u5173\u95ED\u8FF7\u4F60\u7A97\u53E3" : "\u6253\u5F00\u8FF7\u4F60\u7A97\u53E3";
-    }
-
     public void ForceClose()
     {
         _forceClose = true;
         _hotkeyService?.Dispose();
-        _miniWindow?.Close();
         Close();
     }
 
     public void RefreshFromExternalChange()
     {
-        // Nothing to refresh if both windows are hidden/closed
-        if (!IsVisible && _miniWindow == null) return;
+        // Nothing to refresh while the main window is hidden
+        if (!IsVisible) return;
 
         // Skip if state hasn't changed (avoid needless UI rebuild)
         var signature = ComputeStateSignature();
@@ -593,7 +556,6 @@ public partial class MainWindow : Window
             LoadDevices();
             LoadProfiles();
         }
-        _miniWindow?.LoadProfiles();
     }
 
     private static string ComputeStateSignature()
@@ -606,7 +568,8 @@ public partial class MainWindow : Window
         var recordingComm = AudioDeviceService.GetCommunicationsDefault(NAudio.CoreAudioApi.DataFlow.Capture);
         var bt = AudioDeviceService.HasBluetoothDevice();
         var profileCount = ProfileService.GetAll().Count;
-        var drift = string.Join(",", ((App)Application.Current).DriftedApps);
+        var drift = string.Join(",", ((App)Application.Current).DriftedApps)
+            + "|" + string.Join(",", ((App)Application.Current).PendingAppRoutes);
         // Fingerprint every device's id+state so external enable/disable/add/remove triggers refresh.
         var deviceFp = string.Join(",",
             allPlayback.Concat(allRecording).Select(d => $"{d.Id}:{(d.IsDisabled ? "D" : "A")}"));
@@ -628,28 +591,10 @@ public partial class MainWindow : Window
                     ((App)Application.Current).MarkOwnChange();
                     LoadDevices();
                     LoadProfiles();
-                    _miniWindow?.LoadProfiles();
                     ((App)Application.Current).NotifyProfileApplied(profile, result);
                 }
                 catch { }
             });
-        }
-    }
-
-    private void ToggleMiniWindow_Click(object sender, RoutedEventArgs e)
-    {
-        if (_miniWindow is { IsLoaded: true })
-        {
-            _miniWindow.Close();
-            _miniWindow = null;
-            var s = SettingsService.Load();
-            s.MiniWindowVisible = false;
-            SettingsService.Save();
-            UpdateMiniMenuCheck();
-        }
-        else
-        {
-            OpenMiniWindow();
         }
     }
 
@@ -997,7 +942,7 @@ public partial class MainWindow : Window
                     FontWeight = FontWeights.SemiBold,
                     Foreground = new SolidColorBrush(Color.FromRgb(0xB9, 0x1C, 0x1C)),
                 },
-                ToolTip = "Voicemeeter 配置的设备在系统中找不到",
+                ToolTip = "Voicemeeter 设置的设备在系统中找不到",
             };
             DockPanel.SetDock(missingBadge, Dock.Left);
             dock.Children.Add(missingBadge);
@@ -1477,14 +1422,14 @@ public partial class MainWindow : Window
         var setDefaultItem = new MenuItem { Header = "设为默认设备", Tag = device.Id, Icon = MenuGlyph(IconFavStar) };
         setDefaultItem.Click += SetDefaultDevice_Click;
         setDefaultItem.IsEnabled = !device.IsDefault && !device.IsDisabled && !anyLocked;
-        if (anyLocked) setDefaultItem.ToolTip = "已锁定 — 请先解锁配置";
+        if (anyLocked) setDefaultItem.ToolTip = "已锁定 — 请先解锁音频方案";
         menu.Items.Add(setDefaultItem);
         var toggleEnableItem = new MenuItem
         {
             Header = device.IsDisabled ? "启用此设备" : "禁用此设备",
             Tag = device.Id,
             IsEnabled = !anyLocked,
-            ToolTip = anyLocked ? "已锁定 — 请先解锁配置" : null,
+            ToolTip = anyLocked ? "已锁定 — 请先解锁音频方案" : null,
             Icon = MenuGlyph(device.IsDisabled ? IconCheckCircle : IconBlockCircle),
         };
         toggleEnableItem.Click += ToggleEnableDevice_Click;
@@ -1641,7 +1586,6 @@ public partial class MainWindow : Window
             ((App)Application.Current).MarkOwnChange();
             LoadDevices();
             LoadProfiles();
-            _miniWindow?.LoadProfiles();
         }
         catch (Exception ex)
         {
@@ -1664,7 +1608,6 @@ public partial class MainWindow : Window
             ((App)Application.Current).MarkOwnChange();
             LoadDevices();
             LoadProfiles();
-            _miniWindow?.LoadProfiles();
         }
         catch (Exception ex)
         {
@@ -1675,11 +1618,38 @@ public partial class MainWindow : Window
 
     // ── Profiles ─────────────────────────────────────────────
 
+    private Guid? _selectedProfileCardId;
+    private readonly Dictionary<Guid, (Border Card, TextBlock Badge)> _profileCards = new();
+
+    private void SelectProfileCard(Guid id)
+    {
+        _selectedProfileCardId = id;
+        foreach (var (profileId, view) in _profileCards)
+        {
+            bool selected = profileId == id;
+            view.Badge.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
+            if (selected)
+            {
+                view.Card.BorderBrush = new SolidColorBrush(Color.FromRgb(0x25, 0x63, 0xEB));
+                view.Card.BorderThickness = new Thickness(2);
+                view.Card.Padding = new Thickness(11, 9, 11, 9);
+            }
+            else
+            {
+                view.Card.ClearValue(Border.BorderBrushProperty);
+                view.Card.ClearValue(Border.BorderThicknessProperty);
+                view.Card.ClearValue(Border.PaddingProperty);
+            }
+        }
+    }
+
     private void LoadProfiles()
     {
         ProfileList.Items.Clear();
+        _profileCards.Clear();
 
         var profiles = ProfileService.GetAll();
+        if (!profiles.Any(p => p.Id == _selectedProfileCardId)) _selectedProfileCardId = null;
         ProfileEmptyHint.Visibility = profiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         var allPlayback = AudioDeviceService.GetPlaybackDevices();
         var allRecording = AudioDeviceService.GetRecordingDevices();
@@ -1759,34 +1729,55 @@ public partial class MainWindow : Window
                 && !allRecording.Any(d => string.Equals(d.Id, profile.RecordingDeviceId, StringComparison.Ordinal));
             var missingBrush = new SolidColorBrush(Color.FromRgb(0xD3, 0x2F, 0x2F));
 
-            var detailText = new TextBlock
+            TextBlock DeviceDetail(string label, string? id, string? name, bool missing)
             {
-                FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80)),
-                Margin = new Thickness(0, 3, 0, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis,
-            };
-
-            detailText.Inlines.Add(new Run($"▶ {ResolveDeviceName(profile.PlaybackDeviceId, profile.PlaybackDeviceName)}"));
-            if (playbackMissing)
-                detailText.Inlines.Add(new Run(" 未连接") { Foreground = missingBrush, FontWeight = FontWeights.SemiBold });
-            detailText.Inlines.Add(new Run($"  ·  ● {ResolveDeviceName(profile.RecordingDeviceId, profile.RecordingDeviceName)}"));
-            if (recordingMissing)
-                detailText.Inlines.Add(new Run(" 未连接") { Foreground = missingBrush, FontWeight = FontWeights.SemiBold });
-            if (profile.HotkeyKey != 0)
-                detailText.Inlines.Add(new Run($"  ·  ⌨ {FormatHotkey(profile.HotkeyModifiers, profile.HotkeyKey)}"));
+                var text = $"{label}：{ResolveDeviceName(id, name)}";
+                var line = new TextBlock
+                {
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80)),
+                    Margin = new Thickness(0, 3, 0, 0),
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    ToolTip = text + (missing ? " 未连接" : ""),
+                };
+                line.Inlines.Add(new Run(text));
+                if (missing)
+                    line.Inlines.Add(new Run(" 未连接") { Foreground = missingBrush, FontWeight = FontWeights.SemiBold });
+                return line;
+            }
 
             var infoPanel = new StackPanel();
-            infoPanel.Children.Add(nameRow);
-            infoPanel.Children.Add(detailText);
-
-            var applyBtn = new Button
+            var selectedBadge = new TextBlock
             {
-                Content = infoPanel,
-                Style = (Style)FindResource("ProfileApplyButton"),
+                Text = "已选中", FontSize = 10, Foreground = Brushes.RoyalBlue,
+                Margin = new Thickness(8, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+            };
+            var heading = new DockPanel();
+            DockPanel.SetDock(selectedBadge, Dock.Right);
+            heading.Children.Add(selectedBadge);
+            heading.Children.Add(nameRow);
+            infoPanel.Children.Add(heading);
+            infoPanel.Children.Add(DeviceDetail("输出", profile.PlaybackDeviceId, profile.PlaybackDeviceName, playbackMissing));
+            infoPanel.Children.Add(DeviceDetail("输入", profile.RecordingDeviceId, profile.RecordingDeviceName, recordingMissing));
+            if (profile.HotkeyKey != 0)
+                infoPanel.Children.Add(new TextBlock
+                {
+                    Text = $"⌨ {FormatHotkey(profile.HotkeyModifiers, profile.HotkeyKey)}",
+                    FontSize = 11,
+                    Foreground = Brushes.Gray,
+                    Margin = new Thickness(0, 3, 0, 0),
+                });
+
+            var applyItem = new MenuItem
+            {
+                Header = isActive ? "重新应用此音频方案" : "切换到此音频方案",
+                IsEnabled = !blockedByLock,
                 Tag = profile.Id,
             };
-            applyBtn.Click += ApplyProfile_Click;
+            applyItem.Click += ApplyProfile_Click;
+            var profileMenu = new ContextMenu();
+            profileMenu.Items.Add(applyItem);
 
             // Right side: lock + edit + delete links
             var lockBtn = new Button
@@ -1797,7 +1788,7 @@ public partial class MainWindow : Window
                 Foreground = isLocked
                     ? new SolidColorBrush(Color.FromRgb(0xD9, 0x77, 0x06))
                     : new SolidColorBrush(Color.FromRgb(0x9C, 0xA3, 0xAF)),
-                ToolTip = isLocked ? "已锁定 — 点击解锁" : "锁定到此配置",
+                ToolTip = isLocked ? "已锁定 — 点击解锁" : "锁定到此音频方案",
                 FontSize = 13,
             };
             lockBtn.Click += LockProfile_Click;
@@ -1845,7 +1836,7 @@ public partial class MainWindow : Window
             actionPanel.Children.Add(separator);
             actionPanel.Children.Add(deleteBtn);
 
-            // Drag handle (only this region initiates a drag; rest of card stays clickable to apply)
+            // Switching is available from the context menu, never a card left-click.
             var grip = new TextBlock
             {
                 Text = "☰",
@@ -1866,43 +1857,62 @@ public partial class MainWindow : Window
             dock.Children.Add(grip);
             DockPanel.SetDock(actionPanel, Dock.Right);
             dock.Children.Add(actionPanel);
-            dock.Children.Add(applyBtn);
+            dock.Children.Add(infoPanel);
 
             var card = new Border
             {
                 Style = (Style)FindResource(isActive ? "ActiveProfileCard" : "ProfileCard"),
                 Child = dock,
-                Cursor = blockedByLock ? System.Windows.Input.Cursors.Arrow : System.Windows.Input.Cursors.Hand,
+                Cursor = System.Windows.Input.Cursors.Arrow,
                 Tag = profile.Id,
                 AllowDrop = true,
+                Focusable = true,
+                ContextMenu = profileMenu,
                 Opacity = blockedByLock ? 0.5 : 1.0,
-                ToolTip = blockedByLock ? "已被锁定到其他配置 — 先解锁才能切换" : null,
+                ToolTip = blockedByLock ? "已被锁定到其他音频方案 — 可选中查看，先解锁才能切换" : "左键选中，右键应用或切换；✔ 表示当前生效",
             };
-            card.MouseLeftButtonUp += (_, e) =>
-            {
-                if (e.ChangedButton != System.Windows.Input.MouseButton.Left) return;
-                ApplyProfile_Click(applyBtn, e);
-            };
+            card.PreviewMouseLeftButtonDown += (_, _) => SelectProfileCard(profile.Id);
+            card.PreviewMouseRightButtonDown += (_, _) => SelectProfileCard(profile.Id);
+            card.MouseLeftButtonDown += (_, _) => card.Focus();
+            card.GotKeyboardFocus += (_, _) => SelectProfileCard(profile.Id);
             card.PreviewDragOver += ProfileCard_DragOver;
             card.Drop += ProfileCard_Drop;
 
+            _profileCards[profile.Id] = (card, selectedBadge);
             ProfileList.Items.Add(card);
         }
+        if (_selectedProfileCardId is Guid selectedId) SelectProfileCard(selectedId);
 
         bool showWarning = profiles.Count > 0 && !anyActive;
         ProfileWarningText.Visibility = showWarning ? Visibility.Visible : Visibility.Collapsed;
         ProfileWarningText.Tag = (showWarning && SettingsService.Load().EnableBlinkAnimation) ? "Blink" : null;
 
         var drifted = ((App)Application.Current).DriftedApps;
-        if (drifted.Count > 0)
-        {
-            AppDriftWarningText.Text = $"{drifted.Count} \u4E2A\u5E94\u7528\u504F\u79BB: {string.Join(", ", drifted)}";
-            AppDriftWarningText.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            AppDriftWarningText.Visibility = Visibility.Collapsed;
-        }
+        var pending = ((App)Application.Current).PendingAppRoutes;
+        var summary = new List<string>();
+        if (drifted.Count > 0) summary.Add($"{drifted.Count} 个应用偏离音频方案");
+        if (pending.Count > 0) summary.Add($"{pending.Count} 项路由待确认");
+        _hasAppRouteMessages = summary.Count > 0;
+        AppDriftWarningText.Text = _hasAppRouteMessages ? string.Join(" · ", summary) : "应用路由暂无异常或待确认项";
+        var details = _hasAppRouteMessages
+            ? string.Join("\n", drifted.Select(name => $"{name}：已偏离音频方案").Concat(pending)
+                .OrderBy(line => line, StringComparer.CurrentCultureIgnoreCase))
+            : "当前没有偏离或待确认的应用路由。";
+        // Keep selection and scroll position intact when a refresh has no new details.
+        if (AppRouteDetailsText.Text != details) AppRouteDetailsText.Text = details;
+        UpdateAppRouteDetailsVisibility();
+        AppDriftWarningText.Foreground = drifted.Count > 0 ? Brushes.Firebrick : Brushes.Gray;
+    }
+
+    private bool _hasAppRouteMessages;
+
+    private void AppRouteDetails_Toggled(object sender, RoutedEventArgs e) => UpdateAppRouteDetailsVisibility();
+
+    private void UpdateAppRouteDetailsVisibility()
+    {
+        if (AppRouteStatusHeader == null || AppRouteDetailsToggle == null) return;
+        AppRouteStatusHeader.Visibility = _hasAppRouteMessages || AppRouteDetailsToggle.IsChecked == true
+            ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ProfileGrip_MouseDown(object sender, MouseButtonEventArgs e)
@@ -1964,12 +1974,11 @@ public partial class MainWindow : Window
         ProfileService.SaveAll(profiles);
 
         LoadProfiles();
-        _miniWindow?.LoadProfiles();
     }
 
     private void ApplyProfile_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button btn || btn.Tag is not Guid id) return;
+        if (sender is not FrameworkElement element || element.Tag is not Guid id) return;
 
         var profile = ProfileService.GetAll().Find(p => p.Id == id);
         if (profile == null) return;
@@ -1982,12 +1991,11 @@ public partial class MainWindow : Window
             ((App)Application.Current).MarkOwnChange();
             LoadDevices();
             LoadProfiles();
-            _miniWindow?.LoadProfiles();
             ((App)Application.Current).NotifyProfileApplied(profile, result);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"\u5E94\u7528\u914D\u7F6E\u5931\u8D25\uFF1A\n{ex.Message}", "\u9519\u8BEF",
+            MessageBox.Show($"\u5E94\u7528音频方案\u5931\u8D25\uFF1A\n{ex.Message}", "\u9519\u8BEF",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -2029,7 +2037,6 @@ public partial class MainWindow : Window
 
         LoadDevices();
         LoadProfiles();
-        _miniWindow?.LoadProfiles();
     }
 
     private void EditProfile_Click(object sender, RoutedEventArgs e)
@@ -2052,7 +2059,6 @@ public partial class MainWindow : Window
         ProfileService.Save(profile);
         RegisterProfileHotkeys();
         LoadProfiles();
-        _miniWindow?.LoadProfiles();
     }
 
     private void DeleteProfile_Click(object sender, RoutedEventArgs e)
@@ -2062,7 +2068,7 @@ public partial class MainWindow : Window
         var profile = ProfileService.GetAll().Find(p => p.Id == id);
         if (profile == null) return;
 
-        var result = MessageBox.Show($"\u786E\u5B9A\u5220\u9664\u914D\u7F6E \"{profile.Name}\"\uFF1F", "\u786E\u8BA4",
+        var result = MessageBox.Show($"\u786E\u5B9A\u5220\u9664音频方案 \"{profile.Name}\"\uFF1F", "\u786E\u8BA4",
             MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (result == MessageBoxResult.Yes)
         {
@@ -2076,7 +2082,6 @@ public partial class MainWindow : Window
             }
             RegisterProfileHotkeys();
             LoadProfiles();
-            _miniWindow?.LoadProfiles();
         }
     }
 
@@ -2105,7 +2110,6 @@ public partial class MainWindow : Window
 
         LoadDevices();
         LoadProfiles();
-        _miniWindow?.LoadProfiles();
     }
 
     // ── Other ────────────────────────────────────────────────
@@ -2124,6 +2128,25 @@ public partial class MainWindow : Window
         });
     }
 
+    private void OpenVolumeMixer_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("ms-settings:apps-volume") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"无法打开系统音量合成器：\n{ex.Message}", "打开失败",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenProfileSchedules_Click(object sender, RoutedEventArgs e)
+    {
+        if (((App)Application.Current).ProfileSchedules is { } schedules)
+            new ProfileScheduleWindow(schedules) { Owner = this }.ShowDialog();
+    }
+
     private void OpenSettings_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new SettingsWindow { Owner = this };
@@ -2131,7 +2154,6 @@ public partial class MainWindow : Window
         {
             _lastStateSignature = "";
             RefreshFromExternalChange();
-            _miniWindow?.LoadProfiles();
         }
     }
 
@@ -2139,16 +2161,16 @@ public partial class MainWindow : Window
     {
         var dlg = new Microsoft.Win32.SaveFileDialog
         {
-            Title = "导出配置",
-            Filter = "配置备份 (*.json)|*.json",
+            Title = "导出音频方案",
+            Filter = "音频方案备份 (*.json)|*.json",
             FileName = $"AudioDeviceSwitcher-backup-{DateTime.Now:yyyyMMdd}.json",
             DefaultExt = ".json",
         };
         if (dlg.ShowDialog(this) != true) return;
         try
         {
-            BackupService.Export(dlg.FileName);
-            MessageBox.Show("配置已导出。", "导出配置", MessageBoxButton.OK, MessageBoxImage.Information);
+            BackupService.Export(dlg.FileName, ((App)Application.Current).ProfileSchedules!);
+            MessageBox.Show(this, "备份已导出，包含音频方案、音频预设、设备别名和定时计划。\n用于当前电脑恢复，不包含音量、静音状态或全部软件设置。", "导出音频方案", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -2160,32 +2182,36 @@ public partial class MainWindow : Window
     {
         if (((App)Application.Current).IsAnyProfileLocked())
         {
-            MessageBox.Show("已锁定 — 请先解锁配置再导入。", "导入配置",
+            MessageBox.Show("已锁定 — 请先解锁音频方案再导入。", "导入音频方案",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "导入配置",
-            Filter = "配置备份 (*.json)|*.json|所有文件 (*.*)|*.*",
+            Title = "导入音频方案",
+            Filter = "音频方案备份 (*.json)|*.json|所有文件 (*.*)|*.*",
             CheckFileExists = true,
         };
         if (dlg.ShowDialog(this) != true) return;
         try
         {
-            var (profiles, appProfiles, nicknames) = BackupService.ImportMerge(dlg.FileName);
+            var scheduleService = ((App)Application.Current).ProfileSchedules!;
+            var backup = BackupService.ReadForImport(dlg.FileName);
+            if (MessageBox.Show(this, BackupService.DescribeImport(backup, scheduleService),
+                "确认导入备份", MessageBoxButton.YesNo, MessageBoxImage.Question,
+                MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            var (profiles, appProfiles, nicknames, schedules) = BackupService.ImportMerge(backup, scheduleService);
 
             // Imported profiles may carry hotkeys; rebuild registrations and refresh both windows.
             RegisterProfileHotkeys();
             _lastStateSignature = "";
             RefreshFromExternalChange();
             LoadProfiles();
-            _miniWindow?.LoadProfiles();
 
             MessageBox.Show(
-                $"导入完成（合并）：\n配置 {profiles} 个、应用预设 {appProfiles} 个、设备别名 {nicknames} 个。",
-                "导入配置", MessageBoxButton.OK, MessageBoxImage.Information);
+                $"导入完成（合并）：\n音频方案 {profiles} 个、音频预设 {appProfiles} 个、设备别名 {nicknames} 个、定时计划 {schedules} 个。\n导入的定时计划从下一次时间点开始，不补执行导入前的任务。",
+                "导入音频方案", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {

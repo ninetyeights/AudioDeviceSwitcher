@@ -16,6 +16,8 @@ public partial class App : Application
     private MainWindow? _mainWindow;
     private DispatcherTimer? _deviceWatchTimer;
     private DeviceChangeNotifier? _deviceNotifier;
+    private AppRouteMonitor? _appRoutes;
+    public ProfileScheduleService? ProfileSchedules { get; private set; }
     private DateTime _suppressDeviceBalloonUntil = DateTime.MinValue;
     private string? _knownPlaybackId;
     private string? _knownRecordingId;
@@ -79,7 +81,6 @@ public partial class App : Application
 
         var menu = new System.Windows.Forms.ContextMenuStrip();
         menu.Items.Add("打开主窗口", CreateMenuIcon(''), (_, _) => ShowMainWindow());
-        menu.Items.Add("迷你窗口", CreateMenuIcon(''), (_, _) => ShowMiniFromTray());
         menu.Items.Add("设置…", CreateMenuIcon(''), (_, _) => ShowSettingsWindow());
         menu.Items.Add("检查更新…", CreateMenuIcon(''), async (_, _) => await UpdateService.CheckAndPromptAsync(GetVisibleMainWindow(), manual: true));
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
@@ -114,13 +115,27 @@ public partial class App : Application
         // Event-driven (instant) via Windows audio COM notifications.
         // The "immediate" callback runs on the UI thread without debounce specifically
         // for lock enforcement so external default-device changes are reverted ASAP.
-        _deviceNotifier = new DeviceChangeNotifier(CheckDeviceChanges, EnforceLockedProfileImmediately);
+        _appRoutes = new AppRouteMonitor(Dispatcher, OnAppRoutesChanged);
+        _appRoutes.SessionsChanged += () => AudioSessionsChanged?.Invoke();
+        _deviceNotifier = new DeviceChangeNotifier(() =>
+        {
+            _appRoutes.DevicesChanged();
+            CheckDeviceChanges();
+        }, EnforceLockedProfileImmediately);
 
-        // Low-frequency safety net: covers any missed events and refreshes app-drift state
-        // (which depends on external process lifecycle, not just device COM events).
+        // Low-frequency device safety net; app session discovery uses WASAPI notifications.
+        // Verify routes of already-known sessions too: persisted per-app policy changes
+        // do not have a complete public notification API. No process/session discovery here.
         _deviceWatchTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        _deviceWatchTimer.Tick += (_, _) => CheckDeviceChanges();
+        _deviceWatchTimer.Tick += (_, _) =>
+        {
+            CheckDeviceChanges();
+            _appRoutes?.Schedule();
+        };
         _deviceWatchTimer.Start();
+        ProfileSchedules = new ProfileScheduleService(ApplyScheduledProfile,
+            catchUpEnabled: () => SettingsService.Load().CatchUpProfileSchedules,
+            verify: VerifyScheduledProfile);
 
         var startup = SettingsService.Load();
         if (startup.StartMinimized)
@@ -131,12 +146,6 @@ public partial class App : Application
         else
         {
             ShowMainWindow();
-        }
-
-        if (startup.MiniWindowVisible)
-        {
-            if (_mainWindow == null) ShowMainWindow();
-            _mainWindow?.OpenMiniWindow();
         }
 
         _ = MaybeAutoCheckForUpdatesAsync();
@@ -270,6 +279,7 @@ public partial class App : Application
         // Suppress the "device changed" balloon for a short window — COM events from our own
         // change may arrive after MarkOwnChange updates state, so this guards the race.
         _suppressDeviceBalloonUntil = DateTime.Now.AddMilliseconds(1500);
+        _appRoutes?.Schedule();
     }
 
     private void CheckDeviceChanges()
@@ -362,81 +372,82 @@ public partial class App : Application
             _knownPlaybackCommId = playbackComm.Id;
             _knownRecordingCommId = recordingComm.Id;
         }
-
-        CheckAppOverrideDrift(playback?.Id, recording?.Id);
     }
 
-    private void CheckAppOverrideDrift(string? currentPlaybackId, string? currentRecordingId)
+    private string ApplyScheduledProfile(Guid id)
     {
-        var profiles = ProfileService.GetAll();
-        var active = profiles.Find(p =>
-            p.PlaybackDeviceId == currentPlaybackId && p.RecordingDeviceId == currentRecordingId);
-        if (active == null || active.AppOverrides.Count == 0)
-        {
-            _knownDriftedApps.Clear();
-            return;
-        }
-
-        // Single batched Process.GetProcesses() call covers all overrides — beats one
-        // full system scan per override (Process.GetProcesses is allocation-heavy).
-        var allExes = active.AppOverrides
-            .Select(o => o.ExePath)
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
-        var runningByPath = ProfileApplyService.GetRunningProcessesByPath(allExes);
-
-        var drifted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var ov in active.AppOverrides)
-        {
-            if (string.IsNullOrWhiteSpace(ov.ExePath)) continue;
-            var appProfile = AppProfileService.Get(ov.AppProfileId);
-            if (appProfile == null) continue;
-
-            if (!runningByPath.TryGetValue(ov.ExePath, out var pids) || pids.Count == 0) continue; // not running — skip
-
-            // Query across all matching PIDs; return first non-null hit (some PIDs return
-            // E_INVALIDARG for this app's identity mapping, others succeed).
-            string? actualOut = null, actualIn = null;
-            foreach (var pid in pids)
-            {
-                if (actualOut == null)
-                {
-                    try { actualOut = AppAudioRoutingService.GetAppEndpoint(pid, NAudio.CoreAudioApi.DataFlow.Render); } catch { }
-                }
-                if (actualIn == null)
-                {
-                    try { actualIn = AppAudioRoutingService.GetAppEndpoint(pid, NAudio.CoreAudioApi.DataFlow.Capture); } catch { }
-                }
-                if (actualOut != null && actualIn != null) break;
-            }
-
-            bool outOk = string.Equals(actualOut ?? "", appProfile.OutputDeviceId ?? "", StringComparison.OrdinalIgnoreCase);
-            bool inOk = string.Equals(actualIn ?? "", appProfile.InputDeviceId ?? "", StringComparison.OrdinalIgnoreCase);
-            if (!outOk || !inOk)
-                drifted.Add(System.IO.Path.GetFileName(ov.ExePath));
-        }
-
-        // Only notify on newly-detected drift (entries appearing since last check)
-        var newlyDrifted = drifted.Except(_knownDriftedApps, StringComparer.OrdinalIgnoreCase).ToList();
-        _knownDriftedApps = drifted;
-
-        if (newlyDrifted.Count > 0 && SettingsService.Load().NotifyAppDrift)
-        {
-            ToastService.Show(ToastService.TagAppDrift,
-                $"{newlyDrifted.Count} \u4E2A\u5E94\u7528\u5DF2\u504F\u79BB\u914D\u7F6E",
-                string.Join(", ", newlyDrifted));
-        }
-
-        // Locked profile auto-fixes app override drift too.
-        if (drifted.Count > 0 && SettingsService.Load().LockedProfileId == active.Id
-            && DateTime.Now >= _suppressDeviceBalloonUntil)
-        {
-            try { ProfileApplyService.Apply(active); MarkOwnChange(); }
-            catch { }
-            _knownDriftedApps.Clear();
-        }
+        if (SettingsService.Load().LockedProfileId.HasValue)
+            return "已跳过：音频方案已锁定，请先解锁";
+        var profile = ProfileService.GetAll().Find(p => p.Id == id);
+        if (profile == null) return "已跳过：目标音频方案已删除";
+        var result = ProfileApplyService.Apply(profile);
+        MarkOwnChange();
+        _mainWindow?.RefreshFromExternalChange();
+        NotifyProfileApplied(profile, result);
+        return $"等待确认：已提交「{profile.Name}」，正在核对设备和应用规则";
     }
 
+    private (string Message, bool Pending) VerifyScheduledProfile(Guid id)
+    {
+        var profile = ProfileService.GetAll().Find(p => p.Id == id);
+        if (profile == null) return ("检查已结束：目标音频方案已删除", false);
+        if (ProfileApplyService.SelectedProfileId != id)
+            return ("检查已结束：已切换到其他音频方案", false);
+        var problems = new List<string>();
+        var waiting = new List<string>();
+        foreach (var flow in new[] { NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.DataFlow.Capture })
+        {
+            bool output = flow == NAudio.CoreAudioApi.DataFlow.Render;
+            var devices = output ? AudioDeviceService.GetPlaybackDevices() : AudioDeviceService.GetRecordingDevices();
+            var target = output ? profile.PlaybackDeviceId : profile.RecordingDeviceId;
+            var system = devices.Find(d => d.IsDefault)?.Id;
+            var label = output ? "输出" : "输入";
+            if (target != null && !devices.Any(d => d.Id == target)) problems.Add(label + "设备未连接");
+            else if (target != null && (system != target || AudioDeviceService.GetCommunicationsDefault(flow).Id != target))
+                problems.Add(label + "默认设备不匹配");
+            foreach (var rule in profile.AppOverrides)
+            {
+                var preset = AppProfileService.Get(rule.AppProfileId);
+                if (preset == null) { problems.Add("音频预设已删除"); continue; }
+                var name = System.IO.Path.GetFileName(rule.ExePath);
+                var pids = (_appRoutes?.SessionSnapshot ?? []).Where(s => string.Equals(s.ExePath, rule.ExePath, StringComparison.OrdinalIgnoreCase))
+                    .Select(s => s.ProcessId).Distinct().ToArray();
+                if (pids.Length == 0) { waiting.Add(name + "：等待音频会话"); continue; }
+                var expected = output ? preset.OutputDeviceId : preset.InputDeviceId;
+                foreach (var pid in pids)
+                {
+                    var query = AppAudioRoutingService.QueryAppEndpoint(pid, flow);
+                    var state = AppRouteStatus.Evaluate(true, query.Success, query.DeviceId, expected, system);
+                    if (state != AppRouteState.Matched)
+                    {
+                        if (_appRoutes?.IsAwaitingConfirmation(rule.ExePath, flow) == true) waiting.Add(name + label + "：等待确认");
+                        else problems.Add(name + label + (state == AppRouteState.Unknown ? "：无法读取路由" : "：设备不匹配"));
+                    }
+                }
+            }
+        }
+        if (problems.Count > 0) return ("部分成功／需处理：" + string.Join("；", problems.Concat(waiting).Distinct()), false);
+        if (waiting.Count > 0) return ("等待会话／确认：" + string.Join("；", waiting.Distinct()), true);
+        return ("成功：默认设备及应用设备规则均已核对（未测试实际声音）", false);
+    }
+
+    private void OnAppRoutesChanged()
+    {
+        if (_appRoutes == null) return;
+        var newlyDrifted = _appRoutes.Drifted.Except(_knownDriftedApps, StringComparer.OrdinalIgnoreCase).ToList();
+        _knownDriftedApps = new(_appRoutes.Drifted, StringComparer.OrdinalIgnoreCase);
+        if (newlyDrifted.Count > 0 && SettingsService.Load().NotifyAppDrift)
+            ToastService.Show(ToastService.TagAppDrift, $"{newlyDrifted.Count} 个应用已偏离音频方案", string.Join(", ", newlyDrifted));
+        _mainWindow?.RefreshFromExternalChange();
+        AppRoutesChanged?.Invoke();
+    }
+
+    public IReadOnlyList<string> PendingAppRoutes => _appRoutes?.Pending ?? [];
+    public bool IsAppRoutePending(string? path, NAudio.CoreAudioApi.DataFlow flow) =>
+        _appRoutes?.IsAwaitingConfirmation(path, flow) == true;
+    public event Action? AppRoutesChanged;
+    public event Action? AudioSessionsChanged;
+    public void RefreshAppRoutes() => _appRoutes?.Schedule();
     // True if a profile lock is active right now (any profile).
     public bool IsAnyProfileLocked() => SettingsService.Load().LockedProfileId.HasValue;
 
@@ -450,7 +461,7 @@ public partial class App : Application
             var locked = ProfileService.GetAll().Find(p => p.Id == lid);
             ToastService.Show(ToastService.TagDeviceChange,
                 "切换被阻止",
-                $"已锁定到 {locked?.Name ?? "当前配置"}，请先解锁");
+                $"已锁定到 {locked?.Name ?? "当前音频方案"}，请先解锁");
             return false;
         }
         return true;
@@ -466,7 +477,7 @@ public partial class App : Application
             var locked = ProfileService.GetAll().Find(p => p.Id == lid);
             ToastService.Show(ToastService.TagProfileSwitch,
                 "切换被阻止",
-                $"已锁定到 {locked?.Name ?? "当前配置"}，请先解锁");
+                $"已锁定到 {locked?.Name ?? "当前音频方案"}，请先解锁");
             return false;
         }
         return true;
@@ -494,6 +505,7 @@ public partial class App : Application
         // OnDefaultDeviceChanged events triggered by our own SetDefaultEndpoint won't
         // recurse into another full Apply cycle.
         _suppressDeviceBalloonUntil = DateTime.Now.AddMilliseconds(1500);
+        _appRoutes?.Schedule();
         try
         {
             ProfileApplyService.Apply(locked);
@@ -560,21 +572,14 @@ public partial class App : Application
         window.Focus();
     }
 
-    private void ShowMiniFromTray()
-    {
-        if (_mainWindow == null || !_mainWindow.IsLoaded)
-            ShowMainWindow();
-
-        _mainWindow!.OpenMiniWindow();
-        _mainWindow.Hide();
-    }
-
     public void ExitFromUI() => ExitApp();
 
     private void ExitApp()
     {
+        ProfileSchedules?.Dispose();
         _deviceWatchTimer?.Stop();
         _deviceNotifier?.Dispose();
+        _appRoutes?.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _mainWindow?.ForceClose();

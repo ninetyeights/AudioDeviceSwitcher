@@ -15,7 +15,9 @@ public record AppAudioSessionInfo(
     ImageSource? Icon,
     IReadOnlyList<string>? SessionInstanceKeys,
     float Volume,
-    bool Muted);
+    bool Muted,
+    bool HasOutputSession = true,
+    bool HasInputSession = true);
 
 public static class AudioSessionService
 {
@@ -38,7 +40,7 @@ public static class AudioSessionService
     // session is visible to us. QueryFullProcessImageName only needs the "limited info"
     // access right, which Windows grants regardless of integrity level (same trick Task
     // Manager uses to show exe paths for elevated processes).
-    private static string? GetProcessImagePath(uint pid)
+    internal static string? GetProcessImagePath(uint pid)
     {
         var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
         if (handle == 0) return null;
@@ -130,7 +132,7 @@ public static class AudioSessionService
     private readonly record struct RawSession(
         uint Pid, string? ExplicitName, string InstanceKey,
         string ProcessName, string? ExePath, string? WindowTitle, string? InstanceHint,
-        float Volume, bool Muted);
+        float Volume, bool Muted, DataFlow Flow);
 
     // Walks every session on every active render/capture device and returns one raw record
     // per session (no grouping yet — a PID commonly owns several sessions, e.g. separate
@@ -144,7 +146,7 @@ public static class AudioSessionService
         // tree; the WMI fallback (needed for windowless processes) is deferred to a single
         // batched query after this loop instead of one query per PID — see
         // GetProcessWmiInfoBatch.
-        var pending = new List<(uint Pid, string? ExplicitName, string InstanceKey, float Volume, bool Muted)>();
+        var pending = new List<(uint Pid, string? ExplicitName, string InstanceKey, float Volume, bool Muted, DataFlow Flow)>();
         var procCache = new Dictionary<uint, (string ProcessName, string? ExePath, string? WindowTitle)>();
         var needsWmi = new HashSet<uint>();
         using var enumerator = new MMDeviceEnumerator();
@@ -173,6 +175,7 @@ public static class AudioSessionService
                             var session = sessions[i];
                             try
                             {
+                                if (session.State == NAudio.CoreAudioApi.Interfaces.AudioSessionState.AudioSessionStateExpired) continue;
                                 uint pid;
                                 try { pid = session.GetProcessID; }
                                 catch { continue; }
@@ -224,7 +227,7 @@ public static class AudioSessionService
                                 }
                                 catch { }
 
-                                pending.Add((pid, explicitName, instanceKey, volume, muted));
+                                pending.Add((pid, explicitName, instanceKey, volume, muted, flow));
                             }
                             finally { try { session.Dispose(); } catch { } }
                         }
@@ -252,7 +255,7 @@ public static class AudioSessionService
             var info = procCache[p.Pid];
             instanceHints.TryGetValue(p.Pid, out var instanceHint);
             raw.Add(new RawSession(p.Pid, p.ExplicitName, p.InstanceKey,
-                info.ProcessName, info.ExePath, info.WindowTitle, instanceHint, p.Volume, p.Muted));
+                info.ProcessName, info.ExePath, info.WindowTitle, instanceHint, p.Volume, p.Muted, p.Flow));
         }
 
         return raw;
@@ -309,9 +312,14 @@ public static class AudioSessionService
             // instances sharing a PID). Unnamed sessions already get PID-wide control via a
             // null key, which is exactly right for them and doesn't need this precision.
             var sessionKeys = hasExplicitName ? group.Select(r => r.InstanceKey).ToList() : null;
+            // The mixer controls playback only. Never display capture mute/volume as
+            // the app's output state (including capture-only apps).
+            var playback = group.Where(r => r.Flow == DataFlow.Render).ToArray();
 
             list.Add(new AppAudioSessionInfo(first.Pid, displayName, first.ExePath, icon, sessionKeys,
-                first.Volume, first.Muted));
+                playback.Length > 0 ? playback[0].Volume : 1f,
+                playback.Length > 0 && playback.All(r => r.Muted), playback.Length > 0,
+                group.Any(r => r.Flow == DataFlow.Capture)));
         }
 
         list.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.CurrentCultureIgnoreCase));
@@ -319,11 +327,12 @@ public static class AudioSessionService
     }
 
     // Per-application volume/mute via the audio session's ISimpleAudioVolume. A process may
-    // own several sessions (e.g. separate render/capture streams, or several logical
+    // own several playback sessions (e.g. several logical
     // "channels" sharing one host process — see GetActiveAppSessions). sessionKeys, when
     // given, are the exact IAudioSessionControl2 instance identifiers captured for this row;
     // only those sessions are affected. When null, every session owned by the PID is
-    // affected — the correct behavior for ordinary apps that never set a DisplayName.
+    // affected on render endpoints only. Capture sessions must never be changed by
+    // these mixer controls, including the PID-wide fallback below.
     //
     // If sessionKeys is given but none of them are live anymore (the underlying stream was
     // torn down and recreated between enumeration and this call), fall back to every session
@@ -340,51 +349,48 @@ public static class AudioSessionService
     private static void ForEachSessionCore(uint pid, IReadOnlyList<string>? sessionKeys, Action<AudioSessionControl> action)
     {
         using var enumerator = new MMDeviceEnumerator();
-        foreach (var flow in new[] { DataFlow.Render, DataFlow.Capture })
-        {
-            MMDeviceCollection devices;
-            try { devices = enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active); }
-            catch (COMException) { continue; }
+        MMDeviceCollection devices;
+        try { devices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active); }
+        catch (COMException) { return; }
 
-            foreach (var device in devices)
+        foreach (var device in devices)
+        {
+            try
             {
+                AudioSessionManager? manager;
+                try { manager = device.AudioSessionManager; }
+                catch (COMException) { continue; }
+
                 try
                 {
-                    AudioSessionManager? manager;
-                    try { manager = device.AudioSessionManager; }
-                    catch (COMException) { continue; }
-
-                    try
+                    var sessions = manager.Sessions;
+                    if (sessions == null) continue;
+                    for (int i = 0; i < sessions.Count; i++)
                     {
-                        var sessions = manager.Sessions;
-                        if (sessions == null) continue;
-                        for (int i = 0; i < sessions.Count; i++)
+                        var session = sessions[i];
+                        try
                         {
-                            var session = sessions[i];
-                            try
+                            uint spid;
+                            try { spid = session.GetProcessID; }
+                            catch { continue; }
+                            if (spid != pid) continue;
+
+                            if (sessionKeys != null)
                             {
-                                uint spid;
-                                try { spid = session.GetProcessID; }
-                                catch { continue; }
-                                if (spid != pid) continue;
-
-                                if (sessionKeys != null)
-                                {
-                                    string? instanceKey = null;
-                                    try { instanceKey = session.GetSessionInstanceIdentifier; } catch { }
-                                    if (instanceKey == null || !sessionKeys.Contains(instanceKey, StringComparer.Ordinal))
-                                        continue;
-                                }
-
-                                try { action(session); } catch { }
+                                string? instanceKey = null;
+                                try { instanceKey = session.GetSessionInstanceIdentifier; } catch { }
+                                if (instanceKey == null || !sessionKeys.Contains(instanceKey, StringComparer.Ordinal))
+                                    continue;
                             }
-                            finally { try { session.Dispose(); } catch { } }
+
+                            try { action(session); } catch { }
                         }
+                        finally { try { session.Dispose(); } catch { } }
                     }
-                    finally { try { manager.Dispose(); } catch { } }
                 }
-                finally { device.Dispose(); }
+                finally { try { manager.Dispose(); } catch { } }
             }
+            finally { device.Dispose(); }
         }
     }
 

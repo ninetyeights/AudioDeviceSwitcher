@@ -1,10 +1,10 @@
-<Window x:Class="AudioDeviceSwitcher.AppProfilesWindow"
+<Window Style="{StaticResource AppWindow}" x:Class="AudioDeviceSwitcher.AppProfilesWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="应用配置" Height="460" Width="520"
+        Title="音频预设" Height="460" Width="560" MinWidth="480" MinHeight="320"
         Icon="pack://application:,,,/Resources/app.ico"
         WindowStartupLocation="CenterOwner">
-    <Grid Margin="12">
+    <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -12,14 +12,14 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" FontSize="13" Foreground="#555" TextWrapping="Wrap" Margin="0,0,0,8">
-            定义命名的输入/输出设备组合，在系统配置里给应用绑定这些配置，切换系统配置时自动应用到对应应用。
+        <TextBlock Grid.Row="0" FontSize="13" Foreground="#4B5563" TextWrapping="Wrap" Margin="0,0,0,8">
+            保存输入与输出设备组合，供音频方案中的应用设备规则使用。
         </TextBlock>
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
             <Button Content="新建" Padding="12,4" Click="New_Click"/>
-            <TextBlock x:Name="EmptyHint" Text="还没有应用配置，点 新建 开始"
-                       VerticalAlignment="Center" Margin="12,0,0,0" FontSize="12" Foreground="#999"
+            <TextBlock x:Name="EmptyHint" Text="还没有音频预设，点 新建 开始"
+                       VerticalAlignment="Center" Margin="12,0,0,0" FontSize="12" Foreground="#6B7280"
                        Visibility="Collapsed"/>
         </StackPanel>
 
@@ -27,7 +27,7 @@
             <ItemsControl x:Name="ProfileList">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Border Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="1"
+                        <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1"
                                 CornerRadius="6" Padding="12,8" Margin="0,0,0,6">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -35,14 +35,14 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                    <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"/>
-                                    <TextBlock FontSize="11" Foreground="#666">
+                                    <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                                    <TextBlock FontSize="11" Foreground="#6B7280" TextTrimming="CharacterEllipsis" ToolTip="{Binding OutputDeviceName}">
                                         <Run Text="输出: "/>
-                                        <Run Text="{Binding OutputDeviceName, FallbackValue=跟随系统, TargetNullValue=跟随系统}"/>
+                                        <Run Text="{Binding OutputDeviceName, Mode=OneWay, FallbackValue=跟随系统, TargetNullValue=跟随系统}"/>
                                     </TextBlock>
-                                    <TextBlock FontSize="11" Foreground="#666">
+                                    <TextBlock FontSize="11" Foreground="#6B7280" TextTrimming="CharacterEllipsis" ToolTip="{Binding InputDeviceName}">
                                         <Run Text="输入: "/>
-                                        <Run Text="{Binding InputDeviceName, FallbackValue=跟随系统, TargetNullValue=跟随系统}"/>
+                                        <Run Text="{Binding InputDeviceName, Mode=OneWay, FallbackValue=跟随系统, TargetNullValue=跟随系统}"/>
                                     </TextBlock>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">

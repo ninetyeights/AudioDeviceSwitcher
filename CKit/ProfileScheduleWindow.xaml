@@ -1,0 +1,40 @@
+<Window Style="{StaticResource AppWindow}" x:Class="AudioDeviceSwitcher.ProfileScheduleWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="定时切换音频方案" Width="820" Height="580" MinWidth="720" MinHeight="520"
+        WindowStartupLocation="CenterOwner" Background="White">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <StackPanel Margin="0,0,0,12">
+            <TextBlock Text="按电脑本地时间执行；音频方案锁定时跳过。同一时间只执行列表中靠前的计划。&#x0a;手动试运行会立即切换音频方案。电脑关机时不执行，也不会唤醒电脑。" TextWrapping="Wrap" Foreground="#4B5563"/>
+            <CheckBox x:Name="CatchUpCheck" Content="启动或唤醒后，补执行最近应生效的计划" Margin="0,8,0,0" Click="CatchUp_Click"/>
+            <TextBlock Text="默认关闭，错过不补执行。开启后只补最近一条，已处理过的不重复；不会补跑全部计划。" FontSize="11" Foreground="#6B7280" TextWrapping="Wrap" Margin="20,3,0,0"/>
+        </StackPanel>
+        <DataGrid x:Name="ScheduleList" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
+                  SelectionMode="Single" SelectionChanged="Selection_Changed" CanUserAddRows="False"
+                  CanUserSortColumns="False" HeadersVisibility="Column">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="状态" Binding="{Binding State}" Width="55"/>
+                <DataGridTextColumn Header="目标音频方案" Binding="{Binding Profile}" Width="120"/>
+                <DataGridTextColumn Header="时间 / 重复" Binding="{Binding Timing}" Width="160"/>
+                <DataGridTextColumn Header="下次执行" Binding="{Binding Next}" Width="135"/>
+                <DataGridTextColumn Header="最近结果" Binding="{Binding Result}" Width="*" MinWidth="190">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="Margin" Value="4"/></Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+        <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+            <Button Content="＋ 新建计划…" Click="New_Click" Padding="12,5" Margin="0,0,8,0"/>
+            <Button x:Name="EditButton" Content="编辑…" Click="Edit_Click" Padding="12,5" Margin="0,0,8,0" IsEnabled="False"/>
+            <Button x:Name="ToggleButton" Content="启用 / 停用" Click="Toggle_Click" Padding="12,5" Margin="0,0,8,0" IsEnabled="False"/>
+            <Button x:Name="RunButton" Content="立即执行 / 重试" ToolTip="立即重新应用所选计划的音频方案，并核对结果" Click="Run_Click" Padding="12,5" Margin="0,0,8,0" IsEnabled="False"/>
+            <Button x:Name="DeleteButton" Content="删除" Click="Delete_Click" Padding="12,5" IsEnabled="False"/>
+        </WrapPanel>
+        <TextBlock x:Name="Message" Grid.Row="3" Foreground="#92400E" TextWrapping="Wrap" Margin="0,8,0,0"/>
+    </Grid>
+</Window>

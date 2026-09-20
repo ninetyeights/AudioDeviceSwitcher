@@ -28,6 +28,19 @@ jobs:
       - name: Restore
         run: dotnet restore CKit/CKit.csproj
 
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content CKit/CKit.csproj
+          $version = $project.Project.PropertyGroup.Version | Where-Object { $_ }
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag and application version differ" }
+
+      - name: Regression checks
+        run: dotnet run --project tests/RoutingChecks -c Release
+
+      - name: Render UI checks
+        run: dotnet run --project tests/RoutingChecks -c Release --no-build -- --ui CKit ui-preview
+
       - name: Publish (Release, win-x64, self-contained, single-file)
         run: >-
           dotnet publish CKit/CKit.csproj

@@ -28,9 +28,10 @@ public partial class AppOverrideEditDialog : Window
         // Session dropdown from currently-active audio apps that expose an exe path
         var sessions = AudioSessionService.GetActiveAppSessions()
             .Where(s => !string.IsNullOrEmpty(s.ExecutablePath))
-            .Select(s => new SessionOption(s.ExecutablePath!, $"{s.DisplayName} ({Path.GetFileName(s.ExecutablePath)})"))
-            .GroupBy(s => s.ExePath, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First())
+            // The session service already groups streams into logical app instances.
+            // Grouping again by executable loses BlueStacks' named instances.
+            .Select(s => new SessionOption(s.ExecutablePath!,
+                $"{s.DisplayName} ({Path.GetFileName(s.ExecutablePath)} · PID {s.ProcessId})"))
             .ToList();
         SessionBox.ItemsSource = sessions;
 
@@ -45,6 +46,7 @@ public partial class AppOverrideEditDialog : Window
         {
             FromFileRadio.IsChecked = true;
         }
+
     }
 
     private void SourceRadio_Changed(object sender, RoutedEventArgs e) { /* binding handles enablement */ }
@@ -85,8 +87,8 @@ public partial class AppOverrideEditDialog : Window
         if (AppProfileBox.SelectedItem is not AppProfile ap)
         {
             var msg = _profiles.Count == 0
-                ? "还没有应用配置，请先在主窗口的\"应用配置\"里创建。"
-                : "请选择一个应用配置。";
+                ? "还没有音频预设，请先在主窗口的\"音频预设\"里创建。"
+                : "请选择一个音频预设。";
             MessageBox.Show(msg, "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }

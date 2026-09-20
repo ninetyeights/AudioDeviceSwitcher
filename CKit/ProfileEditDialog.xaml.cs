@@ -76,6 +76,7 @@ public partial class ProfileEditDialog : Window
                 BorderThickness = new Thickness(2),
                 Margin = new Thickness(0, 0, 6, 0),
                 Cursor = Cursors.Hand,
+                Focusable = true,
                 ToolTip = tooltip,
                 Tag = hex,
             };
@@ -97,13 +98,22 @@ public partial class ProfileEditDialog : Window
             }
             UpdateSwatchBorder(swatch, hex == SelectedColor);
             swatch.MouseLeftButtonUp += ColorSwatch_Click;
+            System.Windows.Automation.AutomationProperties.SetName(swatch, tooltip);
+            swatch.KeyDown += (_, e) =>
+            {
+                if (e.Key is not (Key.Space or Key.Enter)) return;
+                SelectColor(swatch);
+                e.Handled = true;
+            };
+            swatch.GotKeyboardFocus += (_, _) => UpdateSwatchBorder(swatch, (swatch.Tag as string) == SelectedColor);
+            swatch.LostKeyboardFocus += (_, _) => UpdateSwatchBorder(swatch, (swatch.Tag as string) == SelectedColor);
             ColorPicker.Children.Add(swatch);
         }
     }
 
     private static void UpdateSwatchBorder(Border swatch, bool selected)
     {
-        swatch.BorderBrush = selected
+        swatch.BorderBrush = swatch.IsKeyboardFocused ? Brushes.RoyalBlue : selected
             ? new SolidColorBrush(Color.FromRgb(0x11, 0x18, 0x27))
             : new SolidColorBrush(Color.FromRgb(0xE5, 0xE7, 0xEB));
     }
@@ -111,6 +121,11 @@ public partial class ProfileEditDialog : Window
     private void ColorSwatch_Click(object sender, MouseButtonEventArgs e)
     {
         if (sender is not Border picked) return;
+        SelectColor(picked);
+    }
+
+    private void SelectColor(Border picked)
+    {
         SelectedColor = picked.Tag as string;
         foreach (var child in ColorPicker.Children)
         {
@@ -127,7 +142,7 @@ public partial class ProfileEditDialog : Window
             var p = profiles.Find(x => x.Id == o.AppProfileId);
             var exeDisplay = string.IsNullOrEmpty(o.ExePath) ? "(未设置)" : Path.GetFileName(o.ExePath);
             var profileDisplay = p == null
-                ? "(应用配置已删除)"
+                ? "(音频预设已删除)"
                 : $"→ {p.Name}";
             return new OverrideRow(o.ExePath, exeDisplay, profileDisplay);
         }).ToList();
@@ -139,7 +154,7 @@ public partial class ProfileEditDialog : Window
     {
         if (AppProfileService.GetAll().Count == 0)
         {
-            MessageBox.Show("还没有应用配置。请先在主窗口的\"应用配置\"里创建至少一个应用配置。",
+            MessageBox.Show("还没有音频预设。请先在主窗口的\"音频预设\"里创建至少一个音频预设。",
                 "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -238,7 +253,7 @@ public partial class ProfileEditDialog : Window
     {
         if (string.IsNullOrWhiteSpace(NameBox.Text))
         {
-            MessageBox.Show("请输入配置名称。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("请输入音频方案名称。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         DialogResult = true;

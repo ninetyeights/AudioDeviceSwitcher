@@ -39,7 +39,7 @@ public partial class AppProfileEditDialog : Window
         var name = NameBox.Text.Trim();
         if (string.IsNullOrEmpty(name))
         {
-            MessageBox.Show("请输入配置名称。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("请输入音频预设名称。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 

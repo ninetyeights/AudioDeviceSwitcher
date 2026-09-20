@@ -12,14 +12,25 @@ public record ProfileApplyResult(
 
 public static class ProfileApplyService
 {
+    public static event Action<DeviceProfile>? Applying;
+    private static Guid? _selectedProfileId;
+    public static Guid? SelectedProfileId => _selectedProfileId;
+
+    public static DeviceProfile? FindActiveProfile(string? playback, string? recording)
+    {
+        var profiles = ProfileService.GetAll();
+        bool Matches(DeviceProfile p) => p.PlaybackDeviceId == playback && p.RecordingDeviceId == recording;
+        return profiles.Find(p => p.Id == SettingsService.Load().LockedProfileId && Matches(p))
+            ?? profiles.Find(p => p.Id == _selectedProfileId && Matches(p))
+            ?? profiles.Find(Matches);
+    }
+
     public static ProfileApplyResult Apply(DeviceProfile profile)
     {
+        _selectedProfileId = profile.Id;
+        Applying?.Invoke(profile);
         var allPlayback = AudioDeviceService.GetPlaybackDevices();
         var allRecording = AudioDeviceService.GetRecordingDevices();
-        var currentPlayback = allPlayback.Find(d => d.IsDefault);
-        var currentRecording = allRecording.Find(d => d.IsDefault);
-        var currentPlaybackComm = AudioDeviceService.GetCommunicationsDefault(DataFlow.Render);
-        var currentRecordingComm = AudioDeviceService.GetCommunicationsDefault(DataFlow.Capture);
 
         // Skip devices not in the active set (e.g. bluetooth headphones disconnected).
         // COM SetDefaultEndpoint silently no-ops for such ids — without this guard the
@@ -35,60 +46,35 @@ public static class ProfileApplyService
         if (profile.RecordingDeviceId != null && !recordingAvailable)
             missing.Add($"录音: {profile.RecordingDeviceName ?? "未知"}");
 
-        bool defaultsMatch = profile.PlaybackDeviceId == currentPlayback?.Id
-                          && profile.RecordingDeviceId == currentRecording?.Id
-                          && profile.PlaybackDeviceId == currentPlaybackComm.Id
-                          && profile.RecordingDeviceId == currentRecordingComm.Id;
-        // Skip only when system defaults match AND no AppOverride has drifted.
-        // If anything drifted, re-run so user-triggered re-apply actually fixes them.
-        if (defaultsMatch && !HasDriftedOverrides(profile))
-            return new ProfileApplyResult(0, [], missing, VoicemeeterRestartStatus.NotRequested);
+        // Clear persisted preferences, including apps that are not running. A PID-based
+        // reset misses those apps and they reopen on their previous profile's devices.
+        // Do this even when system defaults already match and no overrides exist.
+        // Let failure propagate: applying overrides on a stale baseline is not success.
+        AppAudioRoutingService.ClearAll();
 
         if (playbackAvailable)
             AudioDeviceService.SetDefaultDevice(profile.PlaybackDeviceId!);
         if (recordingAvailable)
             AudioDeviceService.SetDefaultDevice(profile.RecordingDeviceId!);
 
-        // Reset apps managed by other profiles but not by this one — back to follow-system.
-        // Apps never referenced by any profile stay untouched.
+        // The profile's explicit overrides are the only exceptions to follow-system.
         var thisProfileExes = profile.AppOverrides
             .Select(o => o.ExePath)
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var allManagedExes = ProfileService.GetAll()
-            .SelectMany(p => p.AppOverrides)
-            .Select(o => o.ExePath)
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var runningByPath = GetRunningProcessesByPath(allManagedExes);
+        var runningByPath = GetRunningProcessesByPath(thisProfileExes);
 
         // Merge audio-session PIDs: Chrome-style apps often spawn child processes whose
         // session PID differs from the main-exe PID. Setting only on one leaves the other
         // unset — per-app override works (route changes) but queries via the other PID
         // return "follow system", confusing the UI.
-        foreach (var s in AudioSessionService.GetActiveAppSessions())
+        foreach (var s in thisProfileExes.Count > 0 ? AudioSessionService.GetActiveAppSessions() : [])
         {
             if (string.IsNullOrEmpty(s.ExecutablePath)) continue;
-            if (!allManagedExes.Contains(s.ExecutablePath)) continue;
+            if (!thisProfileExes.Contains(s.ExecutablePath)) continue;
             if (!runningByPath.TryGetValue(s.ExecutablePath, out var list))
                 runningByPath[s.ExecutablePath] = list = new List<uint>();
             if (!list.Contains(s.ProcessId)) list.Add(s.ProcessId);
-        }
-
-        foreach (var exePath in allManagedExes)
-        {
-            if (thisProfileExes.Contains(exePath)) continue;
-            if (!runningByPath.TryGetValue(exePath, out var pids)) continue;
-            foreach (var pid in pids)
-            {
-                try
-                {
-                    AppAudioRoutingService.SetAppEndpoint(pid, DataFlow.Render, null);
-                    AppAudioRoutingService.SetAppEndpoint(pid, DataFlow.Capture, null);
-                }
-                catch { }
-            }
         }
 
         int applied = 0;
@@ -124,39 +110,6 @@ public static class ProfileApplyService
             : VoicemeeterRestartStatus.NotRequested;
 
         return new ProfileApplyResult(applied, skipped, missing, voicemeeterStatus);
-    }
-
-    public static bool HasDriftedOverrides(DeviceProfile profile)
-    {
-        var exes = profile.AppOverrides
-            .Select(o => o.ExePath)
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
-        if (exes.Count == 0) return false;
-
-        var runningByPath = GetRunningProcessesByPath(exes);
-
-        foreach (var ov in profile.AppOverrides)
-        {
-            if (string.IsNullOrWhiteSpace(ov.ExePath)) continue;
-            var appProfile = AppProfileService.Get(ov.AppProfileId);
-            if (appProfile == null) continue;
-
-            if (!runningByPath.TryGetValue(ov.ExePath, out var pids) || pids.Count == 0) continue;
-
-            string? actualOut = null, actualIn = null;
-            foreach (var pid in pids)
-            {
-                if (actualOut == null) { try { actualOut = AppAudioRoutingService.GetAppEndpoint(pid, DataFlow.Render); } catch { } }
-                if (actualIn == null) { try { actualIn = AppAudioRoutingService.GetAppEndpoint(pid, DataFlow.Capture); } catch { } }
-                if (actualOut != null && actualIn != null) break;
-            }
-
-            bool outOk = string.Equals(actualOut ?? "", appProfile.OutputDeviceId ?? "", StringComparison.OrdinalIgnoreCase);
-            bool inOk = string.Equals(actualIn ?? "", appProfile.InputDeviceId ?? "", StringComparison.OrdinalIgnoreCase);
-            if (!outOk || !inOk) return true;
-        }
-        return false;
     }
 
     public static List<uint> GetRunningPidsForExe(string exePath)

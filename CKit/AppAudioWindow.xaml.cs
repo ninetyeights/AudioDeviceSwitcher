@@ -139,15 +139,37 @@ public partial class AppAudioWindow : Window
         public string? SystemDefaultInputId { get; set; }
 
         // "跟随系统" (Id == null) 时用系统默认设备 ID 比较，效果等价就不算偏离
+        private bool _outputKnown;
+        private bool _inputKnown;
+        private readonly bool _hasOutputSession;
+        private readonly bool _hasInputSession;
+        public bool HasOutputSession => _hasOutputSession;
+        private bool HasAudioSession => _hasOutputSession || _hasInputSession;
+        public string RouteStatusText
+        {
+            get
+            {
+                var states = new List<string>();
+                if (IsPending(DataFlow.Render)) states.Add("输出等待确认");
+                else if (!_outputKnown) states.Add("输出路由无法确认");
+                if (IsPending(DataFlow.Capture)) states.Add("输入等待确认");
+                else if (!_inputKnown) states.Add("输入路由无法确认");
+                return string.Join(" · ", states);
+            }
+        }
         public bool IsOutputDrifted => ExpectedProfileName != null
-            && !string.Equals(_selectedOutput.Id ?? SystemDefaultOutputId ?? "",
-                ExpectedOutputId ?? "", StringComparison.OrdinalIgnoreCase);
+            && !IsPending(DataFlow.Render)
+            && AppRouteStatus.Evaluate(HasAudioSession, _outputKnown, _selectedOutput.Id,
+                ExpectedOutputId, SystemDefaultOutputId) == AppRouteState.Drifted;
 
         public bool IsInputDrifted => ExpectedProfileName != null
-            && !string.Equals(_selectedInput.Id ?? SystemDefaultInputId ?? "",
-                ExpectedInputId ?? "", StringComparison.OrdinalIgnoreCase);
+            && !IsPending(DataFlow.Capture)
+            && AppRouteStatus.Evaluate(HasAudioSession, _inputKnown, _selectedInput.Id,
+                ExpectedInputId, SystemDefaultInputId) == AppRouteState.Drifted;
 
         public bool IsDrifted => IsOutputDrifted || IsInputDrifted;
+        private bool IsPending(DataFlow flow) => Application.Current is App app
+            && app.IsAppRoutePending(ExecutablePath, flow);
 
         public SessionRow(AppAudioSessionInfo info, List<DeviceOption> outputs, List<DeviceOption> inputs)
         {
@@ -157,8 +179,10 @@ public partial class AppAudioWindow : Window
             DisplayName = info.DisplayName;
             SubText = info.ExecutablePath is { Length: > 0 } p ? p : $"PID {info.ProcessId}";
             Icon = info.Icon;
-            OutputOptions = outputs;
-            InputOptions = inputs;
+            OutputOptions = outputs.ToList();
+            InputOptions = inputs.ToList();
+            _hasOutputSession = info.HasOutputSession;
+            _hasInputSession = info.HasInputSession;
             // Captured straight off the session object during the same enumeration pass that
             // found this row (see AudioSessionService.EnumerateRawSessions) — avoids a second,
             // full device/session COM walk per row just to read the initial volume/mute state.
@@ -171,18 +195,19 @@ public partial class AppAudioWindow : Window
             _suppressApply = true;
             try
             {
-                var outId = SafeGet(DataFlow.Render);
-                var inId = SafeGet(DataFlow.Capture);
-                _selectedOutput = OutputOptions.FirstOrDefault(o =>
-                    string.Equals(o.Id, outId, StringComparison.OrdinalIgnoreCase)) ?? FollowSystem;
-                _selectedInput = InputOptions.FirstOrDefault(o =>
-                    string.Equals(o.Id, inId, StringComparison.OrdinalIgnoreCase)) ?? FollowSystem;
+                var output = AppAudioRoutingService.QueryAppEndpoint(ProcessId, DataFlow.Render);
+                var input = AppAudioRoutingService.QueryAppEndpoint(ProcessId, DataFlow.Capture);
+                _outputKnown = output.Success;
+                _inputKnown = input.Success;
+                _selectedOutput = ResolveOption(OutputOptions, output);
+                _selectedInput = ResolveOption(InputOptions, input);
 
                 OnChanged(nameof(SelectedOutput));
                 OnChanged(nameof(SelectedInput));
                 OnChanged(nameof(IsOutputDrifted));
                 OnChanged(nameof(IsInputDrifted));
                 OnChanged(nameof(IsDrifted));
+                OnChanged(nameof(RouteStatusText));
                 OnChanged(nameof(Volume));
                 OnChanged(nameof(VolumePercent));
                 OnChanged(nameof(IsMuted));
@@ -190,20 +215,15 @@ public partial class AppAudioWindow : Window
             finally { _suppressApply = false; }
         }
 
-        // Query across all PIDs for this exe (session PID + Process.MainModule matches);
-        // return the first non-null value. Matches the PID set used when applying.
-        private string? SafeGet(DataFlow flow)
+        private static DeviceOption ResolveOption(List<DeviceOption> options, AppAudioRoutingService.EndpointQuery query)
         {
-            foreach (var pid in AllPidsForThisApp())
-            {
-                try
-                {
-                    var id = AppAudioRoutingService.GetAppEndpoint(pid, flow);
-                    if (!string.IsNullOrEmpty(id)) return id;
-                }
-                catch { }
-            }
-            return null;
+            if (query.Success && query.DeviceId == null) return FollowSystem;
+            var existing = query.Success ? options.FirstOrDefault(o =>
+                string.Equals(o.Id, query.DeviceId, StringComparison.OrdinalIgnoreCase)) : null;
+            if (existing != null) return existing;
+            var option = new DeviceOption(query.DeviceId, query.Success ? "设备当前不可用" : "无法读取路由");
+            options.Add(option);
+            return option;
         }
 
         // Process.GetProcesses() + per-process MainModule probing (inside
@@ -243,6 +263,8 @@ public partial class AppAudioWindow : Window
                     try { AppAudioRoutingService.SetAppEndpoint(pid, flow, deviceId); }
                     catch { /* best-effort per PID */ }
                 }
+                LoadCurrent();
+                ((App)Application.Current).RefreshAppRoutes();
             }
             catch (Exception ex)
             {
@@ -267,7 +289,51 @@ public partial class AppAudioWindow : Window
     public AppAudioWindow()
     {
         InitializeComponent();
+        _sessionRefresh.Tick += async (_, _) =>
+        {
+            _sessionRefresh.Stop();
+            await LoadSessionsAsync();
+        };
         Loaded += async (_, _) => await LoadSessionsAsync();
+        ((App)Application.Current).AudioSessionsChanged += OnSessionsChanged;
+        ((App)Application.Current).AppRoutesChanged += OnRoutesChanged;
+        Closed += (_, _) =>
+        {
+            _closed = true;
+            _sessionRefresh.Stop();
+            ((App)Application.Current).AudioSessionsChanged -= OnSessionsChanged;
+            ((App)Application.Current).AppRoutesChanged -= OnRoutesChanged;
+        };
+    }
+
+    private bool _closed;
+    private int _loadVersion;
+    private readonly DispatcherTimer _sessionRefresh = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private void OnSessionsChanged()
+    {
+        if (!_closed && !_sessionRefresh.IsEnabled) _sessionRefresh.Start();
+    }
+    private void OnRoutesChanged()
+    {
+        if (SessionList.ItemsSource is IEnumerable<SessionRow> rows)
+        {
+            var output = AudioDeviceService.GetPlaybackDevices().Find(d => d.IsDefault)?.Id;
+            var input = AudioDeviceService.GetRecordingDevices().Find(d => d.IsDefault)?.Id;
+            var profile = ProfileApplyService.FindActiveProfile(output, input);
+            var presets = AppProfileService.GetAll();
+            foreach (var row in rows)
+            {
+                var ov = profile?.AppOverrides.Find(o => string.Equals(o.ExePath, row.ExecutablePath,
+                    StringComparison.OrdinalIgnoreCase));
+                var preset = ov == null ? null : presets.Find(p => p.Id == ov.AppProfileId);
+                row.ExpectedProfileName = preset?.Name;
+                row.ExpectedOutputId = preset?.OutputDeviceId;
+                row.ExpectedInputId = preset?.InputDeviceId;
+                row.SystemDefaultOutputId = output;
+                row.SystemDefaultInputId = input;
+                row.LoadCurrent();
+            }
+        }
     }
 
     // BuildRows does nothing but COM/WMI/file I/O — none of it touches a UI element or the
@@ -280,7 +346,9 @@ public partial class AppAudioWindow : Window
     // interactive immediately; the list just pops in a beat later.
     private async Task LoadSessionsAsync()
     {
+        var version = ++_loadVersion;
         var rows = await Task.Run(BuildRows);
+        if (_closed || version != _loadVersion) return;
 
         // Kept on the UI thread deliberately: AppAudioRoutingService talks to an undocumented,
         // reverse-engineered WinRT COM factory (see its file header) with no documented
@@ -322,8 +390,7 @@ public partial class AppAudioWindow : Window
             row.SystemDefaultOutputId = currentPlayback?.Id;
             row.SystemDefaultInputId = currentRecording?.Id;
         }
-        var active = ProfileService.GetAll().Find(p =>
-            p.PlaybackDeviceId == currentPlayback?.Id && p.RecordingDeviceId == currentRecording?.Id);
+        var active = ProfileApplyService.FindActiveProfile(currentPlayback?.Id, currentRecording?.Id);
         if (active != null)
         {
             foreach (var row in rows)

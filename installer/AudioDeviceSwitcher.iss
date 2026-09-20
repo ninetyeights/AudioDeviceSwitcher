@@ -5,10 +5,13 @@
 #define AppName "Audio Device Switcher"
 #define AppId_Name "AudioDeviceSwitcher"
 #ifndef AppVersion
-  #define AppVersion "1.2.1"
+  #define AppVersion "1.7.0"
 #endif
 #define AppPublisher "Chester"
 #define AppExeName "AudioDeviceSwitcher.exe"
+#ifndef PublishDir
+  #define PublishDir "..\publish"
+#endif
 #define AppId "{{D7B3F2A1-9E45-4C8B-A0F1-3E5B8C7D2E91}"
 
 [Setup]
@@ -43,7 +46,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Name: "autostart"; Description: "Start automatically on Windows logon"; GroupDescription: "Additional tasks:"; Flags: unchecked
 
 [Files]
-Source: "..\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; AppUserModelID: "{#AppId_Name}.App"

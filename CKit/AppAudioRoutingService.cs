@@ -119,21 +119,33 @@ public static class AppAudioRoutingService
     }
 
     public static string? GetAppEndpoint(uint processId, DataFlow flow)
+        => QueryAppEndpoint(processId, flow).DeviceId;
+
+    public readonly record struct EndpointQuery(bool Success, string? DeviceId);
+
+    public static EndpointQuery QueryAppEndpoint(uint processId, DataFlow flow)
+    {
+        try { return QueryEndpointCore(processId, flow); }
+        catch { return new(false, null); }
+    }
+
+    private static EndpointQuery QueryEndpointCore(uint processId, DataFlow flow)
     {
         var factory = GetFactory();
         int hr = factory.GetPersistedDefaultAudioEndpoint(
             processId, flow, Role.Multimedia, out var hstr);
-        if (hr < 0 || hstr == IntPtr.Zero) return null;
         try
         {
+            if (hr < 0) return new(false, null);
+            if (hstr == IntPtr.Zero) return new(true, null);
             var buf = WindowsGetStringRawBuffer(hstr, out var len);
-            if (len == 0) return null;
+            if (len == 0) return new(true, null);
             var wrapped = Marshal.PtrToStringUni(buf, (int)len);
-            return wrapped == null ? null : UnwrapDeviceId(wrapped);
+            return new(true, wrapped == null ? null : UnwrapDeviceId(wrapped));
         }
         finally
         {
-            WindowsDeleteString(hstr);
+            if (hstr != IntPtr.Zero) WindowsDeleteString(hstr);
         }
     }
 
