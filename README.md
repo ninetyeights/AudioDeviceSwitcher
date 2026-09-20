@@ -17,7 +17,7 @@ Windows 音频设备切换工具。保存常用的输入、输出和应用设备
 
 ## 截图
 
-以下为已有版本截图，部分名称与样式可能和 1.7.0 不同。
+截图中的设备、应用与计划使用示例数据。
 
 ### 主窗口
 
@@ -34,13 +34,9 @@ Windows 音频设备切换工具。保存常用的输入、输出和应用设备
 
 ![音频方案编辑](docs/screenshots/profile-edit.png)
 
-### 音频预设
+### 定时切换
 
-![音频预设](docs/screenshots/app-profiles.png)
-
-### Voicemeeter 集成
-
-![Voicemeeter 集成](docs/screenshots/voicemeeter.png)
+![定时切换音频方案](docs/screenshots/schedules.png)
 
 </details>
 
