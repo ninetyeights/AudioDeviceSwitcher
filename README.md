@@ -1,87 +1,67 @@
-# 音频切换助手 (Audio Device Switcher)
+# 音频切换助手
 
-WPF (.NET 10 for Windows) 音频设备快速切换工具。常驻系统托盘，支持配置管理、全局快捷键、应用级音频路由、蓝牙检测。
+Windows 音频设备切换工具。保存常用的输入、输出和应用设备规则，在工作、通话与娱乐之间快速切换。
 
-## 截图
+[下载最新版本](https://github.com/secure-artifacts/AudioDeviceSwitcher/releases/latest) · [更新日志](CHANGELOG.md)
 
-### 主窗口
-![主窗口](docs/screenshots/main.png)
-
-### 托盘菜单
-![托盘](docs/screenshots/tray.png)
-
-### 配置编辑
-![配置设置](docs/screenshots/profile-edit.png)
-
-### 应用配置（独立预设）
-![应用配置](docs/screenshots/app-profiles.png)
-
-### 应用级音频路由
-![应用音频](docs/screenshots/app-audio.png)
-
-### Voicemeeter 集成
-![Voicemeeter](docs/screenshots/voicemeeter.png)
-
-### 设置
-![设置](docs/screenshots/settings.png)
-
-> 截图文件放到 `docs/screenshots/` 下对应名字即可在 README 自动显示。
+支持 Windows 10 version 2004（19041）及以上、x64；安装包自带运行环境。
 
 ## 功能
 
-界面命名：**音频方案**是一整套设备和应用规则；**音频预设**保存可复用的输入／输出设备组合；**应用设备规则**指定软件使用哪个预设；**应用音频**用于查看与调整当前应用的音频状态。旧版数据与备份保持兼容。
+- **音频方案**：保存设备组合与应用规则，支持快捷键、排序和锁定。左键选择，右键切换。
+- **应用音频**：单独设置应用输入、输出及输出音量；静音不影响麦克风输入，会话出现后自动应用设备规则。
+- **定时切换**：支持每天、指定星期或单次计划，可启停、立即执行／重试。默认错过不补执行。
+- **备份恢复**：备份方案、预设、设备别名和定时计划；同机导入前校验并确认覆盖范围。
+- **设备与托盘**：设备音量、试听、别名、隐藏、开机自启，以及系统音量合成器快捷入口。
+- **Voicemeeter 集成**：可选显示通道、电平、静音及设备状态。
 
-- **一键切换**：播放 / 录音设备快速切换（使用未文档化的 `IPolicyConfig` COM API）
-- **配置管理**：保存常用设备组合（输出+输入+应用覆盖），带全局快捷键绑定，支持拖拽排序、标签颜色
-- **定时切换**：在「工具 → 定时切换音频方案」设置每天、指定星期或单次计划，可启停、立即执行／重试并查看核对结果。默认错过不补执行；可开启「启动或唤醒后，补执行最近应生效的计划」，只补最近一条且不重复处理，方案锁定时仍跳过。电脑关机时不执行，也不会唤醒电脑。计划保存在 `schedules.json`，随方案备份导入／导出；导入后从下一次时间点开始。
-- **导入 / 导出**：将音频方案、音频预设、设备别名、定时计划及错过计划补执行选项保存为 JSON，供当前电脑恢复。导入前校验文件和引用关系，并显示新增／覆盖数量；同标识项目覆盖，其余项目保留。未连接设备原样保留，不进行跨电脑设备匹配。导入不会立即切换音频，也不补执行导入前的计划；不包含音量、静音状态及全部软件设置。
-- **配置锁定**：锁定后外部 / 内部任何设备切换都被阻止或立即恢复（≤ms 级反弹）
-- **应用级路由**：按应用级覆盖默认音频设备（对应 Windows 设置里"应用音量和设备首选项"）
-- **切换时恢复默认路由**：每次应用配置先把所有应用的输入／输出路由恢复为跟随系统（含未运行的应用和系统合成器里手动指定的路由），再设置当前配置的应用覆盖；音量与静音不在此次路由清理范围内。
-- **音量调节**：每个播放设备、每个应用都可调音量 / 静音；设备音量实时跟随系统及其他程序的改动（事件驱动）
-- **测试播放**：右键播放设备「测试播放」，在指定设备上播放测试音
-- **实时电平条**：默认播放 / 录音设备及 Voicemeeter Strip / Bus 显示横向 peak 电平
-- **Voicemeeter 集成**（可选）：Strip 静音切换、设备丢失检测、静音状态锁定（默认关闭，未安装时无开销）
-- **托盘常驻**：主窗口关闭只隐藏到托盘，可从托盘重新打开主窗口
-- **设备管理**：重命名（别名）、隐藏、启用 / 禁用、按字母排序
-- **蓝牙检测**：识别并提示 BTHENUM 蓝牙音频设备
-- **通知中心兼容**：使用 Windows 10/11 原生 Toast（同 Tag 自动替换，不会堆积）
-- **开机自启 / 启动最小化**
-- **配置安全**：配置文件原子写入 + `.bak` 自动备份，崩溃 / 断电不丢配置
-- **崩溃日志**：异常写入 `%AppData%\AudioDeviceSwitcher\crash.log`
+## 截图
 
-## 下载
+以下为已有版本截图，部分名称与样式可能和 1.7.0 不同。
 
-前往 [Releases](../../releases) 页面下载最新安装包：`AudioDeviceSwitcher-Setup-x.y.z.exe`。
+### 主窗口
 
-> Windows SmartScreen 首次运行可能拦截（应用未做代码签名），点击"更多信息 → 仍要运行"即可。
+![主窗口](docs/screenshots/main.png)
 
-## 运行要求
+### 应用音频
 
-- Windows 10 version 2004 (19041) 及以上
-- .NET 10 Runtime（安装包自带 self-contained，不需单独装）
+![应用音频](docs/screenshots/app-audio.png)
 
-## 数据目录
+<details>
+<summary>更多截图</summary>
 
-所有配置、设置、崩溃日志存于：
+### 音频方案编辑
 
+![音频方案编辑](docs/screenshots/profile-edit.png)
+
+### 音频预设
+
+![音频预设](docs/screenshots/app-profiles.png)
+
+### Voicemeeter 集成
+
+![Voicemeeter 集成](docs/screenshots/voicemeeter.png)
+
+</details>
+
+## 使用说明
+
+1. 安装后新建音频方案，选择播放与录音设备。
+2. 如需为应用指定设备，创建音频预设，再添加应用设备规则。
+3. 右键方案进行切换；定时计划在「工具 → 定时切换音频方案」中设置。
+
+切换方案会先重置所有应用的设备路由，再应用该方案的规则，未运行的应用也包含在内；不会重置音量与静音。多开实例目前按 EXE 路径共用规则，备份暂不支持跨电脑自动匹配设备。1.7.0 已暂时移除迷你窗口。
+
+## 源码构建
+
+需要 .NET 10 SDK；生成安装包还需 Inno Setup 6。
+
+```powershell
+dotnet build
+dotnet run --project CKit
 ```
-%AppData%\AudioDeviceSwitcher
-```
 
-## 从源码构建
-
-需要 .NET 10 SDK、Inno Setup 6（用于生成安装包）。
-
-```bash
-dotnet build                  # 编译调试版
-dotnet run --project CKit     # 运行
-publish.cmd                   # 打包 Release + 生成安装包到 dist/
-```
-
-## 更新日志
-
-见 [CHANGELOG.md](CHANGELOG.md)。
+数据目录：`%AppData%\AudioDeviceSwitcher`。
 
 ## 许可
 
